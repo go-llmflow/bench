@@ -111,6 +111,12 @@ func freePort(t *testing.T) string {
 // apportionment is 0 slots, so every request of B borrows. That makes the
 // role of each request certain without depending on timing.
 func gatewayConfig(dir, listen string, chat upstream, extra []upstream, names []string) string {
+	return gatewayConfigWith(dir, listen, chat, extra, names, "", "")
+}
+
+// gatewayConfigWith is gatewayConfig with attributes added to the "chat"
+// model block and HCL appended at the end (other pools and models).
+func gatewayConfigWith(dir, listen string, chat upstream, extra []upstream, names []string, chatAttrs, tail string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, `listen = %q
 master_key_file = %q
@@ -139,8 +145,8 @@ model "chat" {
   class          = "interactive"
   key_file       = %q
   upstream "v0" { base_url = %q }
-}
-`, listen, filepath.Join(dir, "master.key"), filepath.Join(dir, "salt.key"), chat.Model, filepath.Join(dir, "upstream.key"), chat.URL)
+%s}
+`, listen, filepath.Join(dir, "master.key"), filepath.Join(dir, "salt.key"), chat.Model, filepath.Join(dir, "upstream.key"), chat.URL, chatAttrs)
 	for i, u := range extra {
 		fmt.Fprintf(&b, `model %q {
   upstream_model = %q
@@ -151,6 +157,7 @@ model "chat" {
 }
 `, names[i], u.Model, filepath.Join(dir, "upstream.key"), u.URL)
 	}
+	b.WriteString(strings.ReplaceAll(tail, "UPSTREAM_KEY_FILE", filepath.Join(dir, "upstream.key")))
 	return b.String()
 }
 
@@ -170,6 +177,12 @@ func gatewayBin(t *testing.T) string {
 // one virtual key per team.
 func StartGateway(t *testing.T, chat upstream, extra []upstream, names []string) *Gateway {
 	t.Helper()
+	return StartGatewayWith(t, chat, extra, names, "", "")
+}
+
+// StartGatewayWith is StartGateway with gatewayConfigWith's additions.
+func StartGatewayWith(t *testing.T, chat upstream, extra []upstream, names []string, chatAttrs, tail string) *Gateway {
+	t.Helper()
 	bin := gatewayBin(t)
 	dir := t.TempDir()
 	for _, f := range []string{"master.key", "salt.key", "upstream.key"} {
@@ -179,7 +192,7 @@ func StartGateway(t *testing.T, chat upstream, extra []upstream, names []string)
 	}
 	listen := freePort(t)
 	cfg := filepath.Join(dir, "gateway.hcl")
-	if err := os.WriteFile(cfg, []byte(gatewayConfig(dir, listen, chat, extra, names)), 0o600); err != nil {
+	if err := os.WriteFile(cfg, []byte(gatewayConfigWith(dir, listen, chat, extra, names, chatAttrs, tail)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	g := &Gateway{URL: "http://" + listen, Keys: map[string]string{}, log: &bytes.Buffer{}}
