@@ -8,6 +8,8 @@ Measuring tools for LLM gateways such as
 | [`cmd/gwbench`](cmd/gwbench) | interleaved A/B of gateways placed in front of one upstream: the latency each gateway **adds**, paired round by round against a direct call, refused when the machine is loaded |
 | [`cmd/fakevllm`](cmd/fakevllm) | a recording fake vLLM: answers OpenAI chat completions (JSON or SSE) and the Anthropic Messages API (JSON or SSE), and writes every request it receives (method, path, headers, body) as one JSON line |
 | [`e2e`](e2e) | end-to-end checks of llmflow-gateway in front of a **real** vLLM: fair-share priorities and preemption, prefix-cache isolation, Responses / Messages / tokenize / embeddings / rerank, accounting |
+| [`e2e/oidc`](e2e/oidc) | end-to-end checks of llmflow-gateway's OpenID Connect paths against **real** identity providers, dex and go-authn/bridge (behind a test SAML IdP): JWT access tokens, refusals, key rotation, SSO with PKCE, cross-organisation isolation, SCIM |
+| [`fakeupstream`](fakeupstream) | the fake vLLM as a Go package, for tests that embed it with `httptest` |
 
 ```sh
 go install github.com/go-llmflow/bench/cmd/gwbench@latest
@@ -188,11 +190,70 @@ timing.
 Not covered: audio transcription (no Whisper model run on CPU), throughput
 (deliberately not measured here).
 
+## e2e/oidc: llmflow-gateway against real identity providers
+
+The gateway's JWT path (go-authn/oidc), SSO (go-authn/rp) and SCIM had met
+only test keys. `e2e/oidc` runs the same checks against two real providers.
+Each test starts its provider, a counting proxy in front of it (the proxy's
+URL is the issuer, so every key-set fetch the gateway makes is counted), the
+fake upstream and the gateway, all with generated secrets.
+
+| variable | provider |
+|---|---|
+| `BENCH_DEX_IMAGE` | **dex**, as a container, e.g. `ghcr.io/dexidp/dex:v2.46.1`: static clients, static passwords with `groups`, the password grant for API tokens, `keysRotationPeriod` 4 min. Two dex instances share the issuer string but not the keys. |
+| `BENCH_BRIDGE_BIN` | **go-authn/bridge** (`authn-bridge`) in front of a test SAML federation and IdP. The IdP's metadata and responses are signed, and its assertions encrypted, by `xmlsec1`, which must be installed, as in the bridge's own tests. People log in through the IdP's form; `eppn` becomes `preferred_username` and `eduPersonEntitlement` becomes `groups`. API tokens come from the authorization-code flow with PKCE. Key rotation is `authn-bridge keygen` and `retired_signing_key_files`, then a restart. |
+| `BENCH_GATEWAY_BIN` | llmflow-gateway (default: from `PATH`) |
+
+Gateway configuration: organisations `inst-alpha` (team `lab-alpha`) and
+`inst-beta` (team `lab-beta`). `jwt` maps group `grp-alpha` to `lab-alpha`
+and `grp-beta` to `lab-beta`, with `clock_skew` 5 s and `min_refresh` 20 s.
+`sso` binds `admins-alpha` to `org_admin` on `inst-alpha`. `scim` binds
+group `Beta Leads` to `team_admin` on `lab-beta`. The people are alice
+(`grp-alpha`, `admins-alpha`), bob (`grp-beta`) and carol (no group).
+
+The upstream is the fake one (`fakeupstream`). The browser is a Go HTTP
+client that follows redirects and submits the provider's forms. It keeps the
+gateway's `__Host-` cookies on `http://127.0.0.1`, as browsers do for a
+potentially trustworthy origin (W3C Secure Contexts §3.1).
+
+```sh
+go install github.com/go-authn/bridge/cmd/authn-bridge@v0.23.4
+BENCH_DEX_IMAGE=ghcr.io/dexidp/dex:v2.46.1 BENCH_BRIDGE_BIN=$(go env GOPATH)/bin/authn-bridge \
+  go test -v -timeout 20m ./e2e/oidc
+```
+
+### Results (2026-10-26, llmflow-gateway v0.8.0)
+
+dex v2.46.1 (`ghcr.io/dexidp/dex`; the fleet's `claimward/dex` is an
+unmodified fork 232 commits behind it). authn-bridge v0.23.4. xmlsec1 1.3.12.
+
+| check | dex | authn-bridge | evidence (both) |
+|---|---|---|---|
+| (a) token accepted, charged to the mapped org/team | pass | pass | alice → `inst-alpha/lab-alpha`, bob → `inst-beta/lab-beta` in `llmflow_requests_total` and `/admin/spend` |
+| (b) wrong audience | pass | pass | 401, the same body as a garbage bearer |
+| (b) signed by another key, same issuer | pass | pass | 401, same body |
+| (b) `alg: none`, HS256 keyed with the public key (PEM, DER) | pass | pass | 401, same body |
+| (b) expired | pass | pass | 401 after `exp` + 5 s skew |
+| (b) unknown-`kid` flood | pass | pass | 40 tokens after a quiet `min_refresh`: exactly **1** key-set fetch at the provider |
+| (c) key rotation | pass | pass | old token (not expired) and new token both 200, **1** fetch; an SSO login right after the rotation works |
+| (d) SSO code + PKCE S256 + state + nonce | pass | pass | `__Host-llmflow-session` Secure, HttpOnly, SameSite=Lax, Path=/; `/admin/whoami` shows `org_admin` on `inst-alpha` |
+| (d) replayed callback, callback in another browser | pass | pass | 400 both |
+| (d) no role binding | pass | pass | bob: 403 "no administrative role for this account" |
+| (d) logout | pass | pass | without CSRF token 403; with it 200; the old cookie then 401 |
+| (e) org_admin of A against org B | pass | pass | 13 admin listings without `inst-beta`/`lab-beta`; 6 writes on B 403 (control: the same budget write on A is 200); 7 UI pages × 4 queries without B |
+| (f) SCIM user + group → role | pass | pass | carol refused before; after SCIM `team_admin` on `lab-beta` in `/admin/users/…/roles` and in her session |
+
+Findings filed: go-llmflow/gateway#60 (SSO's key set refreshes at most once
+a minute, fixed, so a provider rotation right after start-up refuses logins:
+observed with dex rotating every 30 s), go-llmflow/gateway#61 (README says
+https only; http to a loopback issuer is accepted), go-authn/bridge#79 (no
+documented signing-key rotation procedure; the one tested here works).
+
 ## Development
 
 ```sh
 go vet ./... && go test -race ./...
-go test -run '^$' -fuzz '^FuzzServe$' -fuzztime 30s ./cmd/fakevllm
+go test -run '^$' -fuzz '^FuzzServe$' -fuzztime 30s ./fakeupstream
 ```
 
 CI runs gofmt, vet, the race tests on Linux amd64/arm64 and macOS, a fuzz

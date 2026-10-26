@@ -18,8 +18,16 @@ import (
 	"os"
 	"time"
 
+	"github.com/go-llmflow/bench/fakeupstream"
 	"github.com/spf13/cobra"
 )
+
+type (
+	Options = fakeupstream.Options
+	Record  = fakeupstream.Record
+)
+
+var NewServer = fakeupstream.NewServer
 
 var osExit = os.Exit
 
