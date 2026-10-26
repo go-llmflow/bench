@@ -95,6 +95,7 @@ fakevllm --addr 127.0.0.1:18000 --out requests.jsonl --model fake --reply "ok"
 |---|---|
 | `GET /v1/models` | one model, `--model` |
 | `POST /v1/messages` | an Anthropic message; with `"stream": true` the event sequence `message_start`, `content_block_start`, `content_block_delta`…, `content_block_stop`, `message_delta` (with `usage.output_tokens`), `message_stop` |
+| `POST /v1/messages/count_tokens` | `{"input_tokens": N}`, where N is the number of words in the prompt (`system` included), as Anthropic and vLLM answer it; it carries the same workspace headers and `--status` as `/v1/messages` (since v0.4.1) |
 | any other `POST` | an OpenAI `chat.completion`; with `"stream": true`, `chat.completion.chunk` events (role, one chunk per word of `--reply`, finish), the usage chunk with empty `choices` when `stream_options.include_usage` is set, then `data: [DONE]` |
 
 Usage is predictable: one prompt token per whitespace-separated word of the
