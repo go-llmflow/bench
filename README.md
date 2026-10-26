@@ -201,7 +201,7 @@ fake upstream and the gateway, all with generated secrets.
 | variable | provider |
 |---|---|
 | `BENCH_DEX_IMAGE` | **dex**, as a container, e.g. `ghcr.io/dexidp/dex:v2.46.1`: static clients, static passwords with `groups`, the password grant for API tokens, `keysRotationPeriod` 4 min. Two dex instances share the issuer string but not the keys. |
-| `BENCH_BRIDGE_BIN` | **go-authn/bridge** (`authn-bridge`) in front of a test SAML federation and IdP. The IdP's metadata and responses are signed, and its assertions encrypted, by `xmlsec1`, which must be installed, as in the bridge's own tests. People log in through the IdP's form; `eppn` becomes `preferred_username` and `eduPersonEntitlement` becomes `groups`. API tokens come from the authorization-code flow with PKCE. Key rotation is `authn-bridge keygen` and `retired_signing_key_files`, then a restart. |
+| `BENCH_BRIDGE_BIN` | **go-authn/bridge** (`authn-bridge`) in front of a test SAML federation and IdP from [go-authn/saml/samltest](https://github.com/go-authn/saml#testing-a-program-built-on-it-samltest) (v0.5.0, pure Go). The metadata and the Responses are signed, and the assertions encrypted to the bridge. People log in through the IdP's form; `eppn` becomes `preferred_username` and `eduPersonEntitlement` becomes `groups`. API tokens come from the authorization-code flow with PKCE. Key rotation follows the bridge README's [procedure](https://github.com/go-authn/bridge#rotating-the-token-signing-key), with a restart at each step: the next key is published first in `retired_signing_key_files` (the JWKS lists both kids, tokens keep the old one), then it signs and the old key stays published. |
 | `BENCH_GATEWAY_BIN` | llmflow-gateway (default: from `PATH`) |
 
 Gateway configuration: organisations `inst-alpha` (team `lab-alpha`) and
@@ -225,7 +225,10 @@ BENCH_DEX_IMAGE=ghcr.io/dexidp/dex:v2.46.1 BENCH_BRIDGE_BIN=$(go env GOPATH)/bin
 ### Results (2026-10-26, llmflow-gateway v0.8.0)
 
 dex v2.46.1 (`ghcr.io/dexidp/dex`; the fleet's `claimward/dex` is an
-unmodified fork 232 commits behind it). authn-bridge v0.23.4. xmlsec1 1.3.12.
+unmodified fork 232 commits behind it). authn-bridge v0.23.4. The SAML side was signed by xmlsec1 1.3.12 in bench
+v0.3.0. From v0.3.1 it is go-authn/saml/samltest v0.5.0, whose own tests
+have xmlsec1 verify and decrypt its output. `TestBridge` passed again with
+it, two-step rotation included, on 2026-10-26.
 
 | check | dex | authn-bridge | evidence (both) |
 |---|---|---|---|

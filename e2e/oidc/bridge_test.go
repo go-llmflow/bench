@@ -3,12 +3,16 @@ package oidc
 import (
 	"bytes"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/go-authn/saml/samltest"
 )
 
 // go-authn/bridge (authn-bridge), configured from its README: issuer,
@@ -17,26 +21,34 @@ import (
 // the fingerprint of its signing certificate, one IdP), claims (eppn ->
 // preferred_username, eduPersonEntitlement -> groups), and clients. Key
 // rotation is internal/app/config.go's retired_signing_key_files: a key
-// that signed before the current one stays published.
+// listed there is published and never signs.
+//
+// The federation and the IdP are go-authn/saml/samltest: signed metadata,
+// signed Responses, assertions encrypted to the bridge's SAML key.
 
 const envBridge = "BENCH_BRIDGE_BIN" // authn-bridge binary
 
-const bridgeTTL = 120 * time.Second // token_lifetime
+const (
+	bridgeTTL = 120 * time.Second // token_lifetime
+	idpEntity = "https://idp.univ-ex.example/idp/shibboleth"
+	idpScope  = "univ-ex.example"
+)
 
 type bridgeIdP struct {
-	t                      *testing.T
 	bin                    string
 	proxy                  *Proxy
-	saml                   *SAMLIdP
 	dir                    string
 	gwRedirect             string
 	password               string
 	apiSecret, adminSecret string
-	key, retired           []string // current key file, retired ones
+	spKey, spCert          string
+	fedCert, fingerprint   string
+	metadataURL            string
+	key                    string   // current signing key file
+	retired                []string // published, never signing
 	listen                 int
 	stop                   func()
 	other                  string // host:port of bridge 2 (same issuer, other key)
-	otherKey               string
 }
 
 func (b *bridgeIdP) Name() string       { return "authn-bridge" }
@@ -61,17 +73,14 @@ func (b *bridgeIdP) keygen(t *testing.T, name string, salt bool) string {
 }
 
 func (b *bridgeIdP) config(listen int, key string, retired []string) string {
-	q := func(ss []string) string {
-		var out []string
-		for _, s := range ss {
-			out = append(out, fmt.Sprintf("%q", s))
-		}
-		return "[" + strings.Join(out, ", ") + "]"
+	var r []string
+	for _, s := range retired {
+		r = append(r, fmt.Sprintf("%q", s))
 	}
 	return fmt.Sprintf(`issuer            = %q
 listen            = "127.0.0.1:%d"
 signing_key_file  = %q
-retired_signing_key_files = %s
+retired_signing_key_files = [%s]
 subject_salt_file = %q
 token_lifetime    = %q
 requests_per_minute = 0
@@ -103,18 +112,10 @@ client %q {
   redirect_uris = ["http://127.0.0.1/callback"]
   audience      = [%q]
 }
-`, b.proxy.URL(), listen, key, q(retired), filepath.Join(b.dir, "salt"), bridgeTTL.String(),
-		b.saml.SP.keyFile, b.saml.SP.certFile, b.saml.Metadata.URL, b.saml.Fed.certFile, colons(fingerprint(b.saml.Fed.cert)), idpEntity,
+`, b.proxy.URL(), listen, key, strings.Join(r, ", "), filepath.Join(b.dir, "salt"), bridgeTTL.String(),
+		b.spKey, b.spCert, b.metadataURL, b.fedCert, b.fingerprint, idpEntity,
 		adminClient, filepath.Join(b.dir, "admin.secret"), b.gwRedirect,
 		apiClient, filepath.Join(b.dir, "api.secret"), apiClient)
-}
-
-func colons(hex string) string {
-	var parts []string
-	for i := 0; i+2 <= len(hex); i += 2 {
-		parts = append(parts, hex[i:i+2])
-	}
-	return strings.Join(parts, ":")
 }
 
 // serve starts one authn-bridge process; it returns a stop function.
@@ -154,22 +155,56 @@ func startBridge(t *testing.T, gwPort int) *bridgeIdP {
 	if bin == "" {
 		t.Skipf("%s not set: no authn-bridge to test against", envBridge)
 	}
-	b := &bridgeIdP{t: t, bin: bin, proxy: NewProxy(t), dir: t.TempDir(), password: "pw-" + randomHex(12),
+	b := &bridgeIdP{bin: bin, proxy: NewProxy(t), dir: t.TempDir(), password: "pw-" + randomHex(12),
 		apiSecret: randomHex(24), adminSecret: randomHex(24), gwRedirect: fmt.Sprintf("http://127.0.0.1:%d/admin/callback", gwPort)}
-	b.saml = NewSAMLIdP(t, b.password)
-	b.saml.SPEntity = b.proxy.URL() + "/saml"
-	b.saml.ACS = b.proxy.URL() + "/saml/acs"
+
+	// The federation and its IdP.
+	fed, err := samltest.NewParty("federation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	idpKey, _ := samltest.NewParty("idp")
+	sp, _ := samltest.NewParty("sp")
+	if b.spKey, b.spCert, err = sp.WriteFiles(b.dir, "sp"); err != nil {
+		t.Fatal(err)
+	}
+	_, b.fedCert, _ = fed.WriteFiles(b.dir, "federation")
+	b.fingerprint = fed.Fingerprint()
+	idpSrv := httptest.NewServer(nil)
+	t.Cleanup(idpSrv.Close)
+	idp := &samltest.IdP{EntityID: idpEntity, Scope: idpScope, SSO: idpSrv.URL + "/SSO", Name: "Université d'exemple", Signer: idpKey}
+	idpSrv.Config.Handler = idp.Handler(b.proxy.URL()+"/saml", b.proxy.URL()+"/saml/acs", sp.Cert, func(user, pw string) ([]samltest.Attribute, bool) {
+		p, ok := people[user]
+		if !ok || pw != b.password {
+			return nil, false
+		}
+		eppn := p.name + "@" + idpScope
+		return []samltest.Attribute{
+			{Name: samltest.EPPN, Values: []string{eppn}},
+			{Name: samltest.SubjectID, Values: []string{eppn}},
+			{Name: samltest.Entitlement, Values: p.groups},
+			{Name: samltest.DisplayName, Values: []string{p.name}},
+			{Name: samltest.Mail, Values: []string{eppn}},
+		}, true
+	})
+	md, err := (&samltest.Federation{Signer: fed, IdPs: []*samltest.IdP{idp}}).Metadata(24 * time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mdSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write(md) }))
+	t.Cleanup(mdSrv.Close)
+	b.metadataURL = mdSrv.URL
+
 	writeFile(t, b.dir, "admin.secret", b.adminSecret+"\n", 0o600)
 	writeFile(t, b.dir, "api.secret", b.apiSecret+"\n", 0o600)
-	b.key = []string{b.keygen(t, "oidc-1.key", true)}
+	b.key = b.keygen(t, "oidc-1.key", true)
 	b.listen = freePort(t)
-	b.stop = b.serve(t, b.listen, b.key[0], nil)
+	b.stop = b.serve(t, b.listen, b.key, nil)
 	b.proxy.To(fmt.Sprintf("http://127.0.0.1:%d", b.listen))
 	// Bridge 2: the same issuer, salt, SAML and clients, its own key. The
 	// browser reaches it by rewriting the issuer's host:port.
 	otherPort := freePort(t)
-	b.otherKey = b.keygen(t, "other.key", false)
-	b.serve(t, otherPort, b.otherKey, nil)
+	b.serve(t, otherPort, b.keygen(t, "other.key", false), nil)
 	b.other = fmt.Sprintf("127.0.0.1:%d", otherPort)
 	return b
 }
@@ -206,15 +241,62 @@ func (b *bridgeIdP) OtherKeyToken(t *testing.T, user string) string {
 	return b.apiToken(t, apiClient, b.apiSecret, user, "http://127.0.0.1/callback", "access_token", b.other)
 }
 
-// Rotate is the operator's rotation: keygen a new key, restart with it as
-// signing_key_file and the old one in retired_signing_key_files.
+// kids are the key IDs the provider publishes.
+func (b *bridgeIdP) kids(t *testing.T) []string {
+	t.Helper()
+	var set struct {
+		Keys []struct{ Kid string } `json:"keys"`
+	}
+	getJSON(t, fmt.Sprintf("http://127.0.0.1:%d/jwks", b.listen), &set)
+	var out []string
+	for _, k := range set.Keys {
+		out = append(out, k.Kid)
+	}
+	return out
+}
+
+// Rotate is the operator's rotation, in two steps:
+//
+//  1. keygen the next key and PUBLISH it first, in retired_signing_key_files
+//     (published, never signing), restart: relying parties that cache the
+//     key set learn it before any token is signed with it;
+//  2. make it signing_key_file and move the old key to
+//     retired_signing_key_files, restart: tokens signed by the old key
+//     still verify until they expire.
 func (b *bridgeIdP) Rotate(t *testing.T) {
 	t.Helper()
-	next := b.keygen(t, fmt.Sprintf("oidc-%d.key", len(b.key)+1), false)
-	b.retired = append(b.retired, b.key[len(b.key)-1])
-	b.key = append(b.key, next)
+	before := b.kids(t)
+	next := b.keygen(t, fmt.Sprintf("oidc-%s.key", randomHex(3)), false)
 	b.stop()
-	b.stop = b.serve(t, b.listen, next, b.retired)
+	b.stop = b.serve(t, b.listen, b.key, append(append([]string{}, b.retired...), next))
+	published := b.kids(t)
+	signing, _ := jwtParts(t, b.APIToken(t, "bob"))
+	t.Logf("step 1, next key published: JWKS kids %v -> %v; tokens still signed by %v", before, published, signing["kid"])
+	if len(published) != len(before)+1 {
+		t.Fatalf("step 1 did not publish the next key: %v -> %v", before, published)
+	}
+	if !contains(before, signing["kid"]) {
+		t.Fatalf("step 1 signs with a new key already: %v", signing["kid"])
+	}
+	b.retired = append(b.retired, b.key)
+	b.key = next
+	b.stop()
+	b.stop = b.serve(t, b.listen, b.key, b.retired)
+	after := b.kids(t)
+	t.Logf("step 2, next key signing: JWKS kids %v", after)
+	if len(after) != len(published) {
+		t.Fatalf("step 2 changed the published set: %v -> %v", published, after)
+	}
+}
+
+func contains(list []string, v any) bool {
+	s, _ := v.(string)
+	for _, x := range list {
+		if x == s {
+			return true
+		}
+	}
+	return false
 }
 
 func TestBridge(t *testing.T) {
