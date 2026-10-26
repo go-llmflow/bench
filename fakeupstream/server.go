@@ -117,7 +117,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if s.opt.Delay > 0 {
 		time.Sleep(s.opt.Delay)
 	}
-	if r.URL.Path == "/v1/messages" {
+	if r.URL.Path == "/v1/messages" || r.URL.Path == "/v1/messages/count_tokens" {
 		switch {
 		case s.opt.Workspace == "per-key" && r.Header.Get("X-Api-Key") != "":
 			// One workspace per API key, as Anthropic resolves a key to
@@ -143,6 +143,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	words := strings.Fields(s.opt.Reply)
 	switch {
+	case r.URL.Path == "/v1/messages/count_tokens":
+		// Anthropic's and vLLM's answer: the prompt's input tokens (here
+		// its words, as the usage counts them); nothing is generated.
+		writeJSON(w, map[string]any{"input_tokens": prompt})
 	case r.URL.Path == "/v1/messages" && req.Stream:
 		s.messagesSSE(w, words, prompt)
 	case r.URL.Path == "/v1/messages":

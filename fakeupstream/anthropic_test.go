@@ -42,6 +42,28 @@ func TestAnthropicCacheUsageAndHeaders(t *testing.T) {
 	}
 }
 
+// /v1/messages/count_tokens answers {"input_tokens": N}, N the prompt's
+// words (system included), with the workspace headers; Status applies.
+func TestCountTokens(t *testing.T) {
+	srv, recs := newTest(t, Options{Workspace: "per-key"})
+	resp := post(t, srv.URL+"/v1/messages/count_tokens", `{"model":"m","system":"be brief","messages":[{"role":"user","content":"one two three"}]}`,
+		map[string]string{"X-Api-Key": "k"})
+	var c map[string]int
+	if err := json.NewDecoder(resp.Body).Decode(&c); err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 200 || len(c) != 1 || c["input_tokens"] != 5 {
+		t.Fatalf("count: %d %v", resp.StatusCode, c)
+	}
+	if !strings.HasPrefix(resp.Header.Get("Anthropic-Workspace-Id"), "wrkspc_") || len(*recs) != 1 || (*recs)[0].Path != "/v1/messages/count_tokens" {
+		t.Fatalf("workspace %q, records %d", resp.Header.Get("Anthropic-Workspace-Id"), len(*recs))
+	}
+	srv2, _ := newTest(t, Options{Status: 429, RetryAfter: "3"})
+	if resp := post(t, srv2.URL+"/v1/messages/count_tokens", `{"messages":[]}`, nil); resp.StatusCode != 429 || resp.Header.Get("Retry-After") != "3" {
+		t.Fatalf("count under Status: %d", resp.StatusCode)
+	}
+}
+
 func TestAnthropicErrors(t *testing.T) {
 	for status, typ := range map[int]string{429: "rate_limit_error", 529: "overloaded_error", 500: "api_error"} {
 		srv, recs := newTest(t, Options{Status: status, RetryAfter: "7"})
