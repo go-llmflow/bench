@@ -7,6 +7,7 @@ Measuring tools for LLM gateways such as
 |---|---|
 | [`cmd/gwbench`](cmd/gwbench) | interleaved A/B of gateways placed in front of one upstream: the latency each gateway **adds**, paired round by round against a direct call, refused when the machine is loaded |
 | [`cmd/fakevllm`](cmd/fakevllm) | a recording fake vLLM: answers OpenAI chat completions (JSON or SSE) and the Anthropic Messages API (JSON or SSE), and writes every request it receives (method, path, headers, body) as one JSON line |
+| [`e2e`](e2e) | end-to-end checks of llmflow-gateway in front of a **real** vLLM: fair-share priorities and preemption, prefix-cache isolation, Responses / Messages / tokenize / embeddings / rerank, accounting |
 
 ```sh
 go install github.com/go-llmflow/bench/cmd/gwbench@latest
@@ -109,6 +110,83 @@ References for the answer shapes: the Anthropic
 [streaming messages](https://platform.claude.com/docs/en/build-with-claude/streaming)
 event sequence, and vLLM's own OpenAI-compatible server (the usage chunk
 with empty `choices`, `data: [DONE]`).
+
+## e2e: llmflow-gateway against a real vLLM
+
+The gateway's design rests on vLLM behaviours read in vLLM's docs and source.
+`e2e/` checks them live: it starts `llmflow-gateway` with freshly generated
+keys (nothing secret is read from the environment), creates one virtual key
+per team, and drives it in front of a running vLLM. Without `BENCH_VLLM_URL`
+every test skips, so CI runs none of them.
+
+| variable | meaning |
+|---|---|
+| `BENCH_VLLM_URL` | the chat vLLM, e.g. `http://127.0.0.1:8000` (required) |
+| `BENCH_VLLM_MODEL` | its model name (default: the first of `/v1/models`) |
+| `BENCH_GATEWAY_BIN` | the `llmflow-gateway` binary (default: from `PATH`) |
+| `BENCH_VLLM_MAX_NUM_SEQS` | the server's `--max-num-seqs` (the scenarios need 2) |
+| `BENCH_VLLM_KV_SHORTAGE=1` | vLLM runs with a tiny KV cache: enables the preemption checks |
+| `BENCH_VLLM_EMBED_URL`, `BENCH_VLLM_RERANK_URL` | optional embedding and score-model servers |
+
+Gateway configuration used by every test: organisation A (teams `a1`, `a2`)
+with share 0.5 and B (`b1`) with share 0.25 on a pool of capacity 2, so by
+Hamilton apportionment A reserves 1 slot and B none: every request of B
+borrows, the first request of A is within its share. `cache_isolation = "org"`.
+
+### How vLLM was run (2026-10-26)
+
+vLLM **0.32.1rc1.dev505+g00b6c4c56** (`vllm/vllm-openai-cpu:nightly-arm64`)
+in Docker on an Apple M-series Mac (arm64 Linux VM, 8 GiB), model
+**Qwen/Qwen2.5-0.5B-Instruct** in bfloat16; `BAAI/bge-small-en-v1.5`
+(embeddings) and `BAAI/bge-reranker-base` (rerank). The released
+`v0.32.0-arm64` CPU image fails every generation on this machine
+(`compute_slot_mapping`: "Boolean value of Tensor with more than one value is
+ambiguous"), which is why the nightly is used. llmflow-gateway **v0.8.0**.
+
+```sh
+# checks a-e except preemption
+docker run -d -p 127.0.0.1:8000:8000 -e VLLM_CPU_KVCACHE_SPACE=1 \
+  -e VLLM_CPU_OMP_THREADS_BIND=0-7 -e VLLM_ENABLE_RESPONSES_API_STORE=1 \
+  vllm/vllm-openai-cpu:nightly-arm64 --model Qwen/Qwen2.5-0.5B-Instruct \
+  --dtype bfloat16 --max-model-len 4096 --max-num-seqs 2 \
+  --scheduling-policy priority --enable-prefix-caching
+BENCH_VLLM_URL=http://127.0.0.1:8000 go test -v -timeout 60m ./e2e
+
+# preemption: a 640-token KV cache
+docker run ... --max-model-len 512 --max-num-seqs 2 --scheduling-policy priority \
+  --enable-prefix-caching --kv-cache-memory-bytes 8M
+BENCH_VLLM_URL=http://127.0.0.1:8000 BENCH_VLLM_KV_SHORTAGE=1 go test -v -run Preempt ./e2e
+```
+
+`VLLM_ENABLE_RESPONSES_API_STORE=1` is needed for the Responses control:
+without it vLLM stores no response at all, whatever `store` says.
+
+### Results (2026-10-26, gateway v0.8.0)
+
+Every ordering check has a **control** straight to vLLM that must come out
+the other way; the cache checks read vLLM's own counters
+(`vllm:prefix_cache_hits_total`, `vllm:prefix_cache_queries_total`), never
+timing.
+
+| check | test | result | evidence |
+|---|---|---|---|
+| control: FCFS at equal priority | `TestControlFCFSWithoutPriorities` | pass | direct, all priority 0: B3 (sent first) first token 4.7 s before A1 |
+| vLLM: `X-Vllm-Priority` overrides the body | `TestVLLMHeaderOverridesBodyPriority` | pass | body 100 + header −100: B3 before A1; body 100 alone: A1 before B3 |
+| (a) within-share before borrowers | `TestWithinShareBeforeBorrowers` | pass | through the gateway A1 (sent after B3) got its first token 5.2 s before the borrower B3 |
+| (a) control: victim is the latest arrival | `TestControlPreemptsLatestArrival` | pass | KV 640 tokens, 2 × 384 generated; direct: A1 (later) stalled 1 m 35 s, B1 finished first |
+| (a) borrower preempted first | `TestBorrowerPreemptedFirst` | pass | through the gateway: the borrower B1 (started first) stalled 1 m 22 s, A1's longest gap 1.06 s, A1 finished first |
+| (b) client priority ignored | `TestClientCannotRaiseItsPriority` | pass | B3 sent body `priority`, `vllm_xargs`, `extra_body`, `X-Vllm-Priority: -100`: A1 still first |
+| (b)+(c) prefix cache | `TestPrefixCacheIsolation` | pass | control direct, unsalted repeat: 768/812 hit; a1 on that unsalted prompt: 0/812; a2 after a1 (same org): 768/814; b1 after a1: 0/814; b1 with a1's client `cache_salt`: 0/814; a2 with another client salt: 768/814 |
+| (d) Responses, stateless | `TestResponsesStatelessThroughGateway` | pass | gateway response (`store: true` asked) is 404 at vLLM's `GET /v1/responses/{id}`; control: a direct `store: true` response is readable |
+| (d) Messages | `TestMessagesThroughGateway` | pass | JSON `type=message`, SSE `message_start … message_stop` |
+| (d) `/tokenize` | `TestTokenizeThroughGateway` | pass | count 6 through the gateway, 6 from vLLM |
+| (d) embeddings | `TestEmbeddingsThroughGateway` | pass | 2 vectors of 384 |
+| (d) rerank v1 and v2 | `TestRerankThroughGateway` | pass | Paris ranked first (0.998), `prompt_tokens` 34 |
+| (e) accounting | `TestAccountingMatchesVLLM` | pass | chat JSON + chat stream (no client usage) + Messages + Responses: vLLM counted 132 prompt / 44 generated, the gateway charged 132 / 44 |
+| vLLM beyond `--max-num-seqs` | `TestVLLMQueuesInsteadOfRefusing` | pass | 6 concurrent requests with 2 slots: six 200, no 429 or 503 |
+
+Not covered: audio transcription (no Whisper model run on CPU), throughput
+(deliberately not measured here).
 
 ## Development
 
