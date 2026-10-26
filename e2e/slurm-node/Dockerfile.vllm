@@ -1,0 +1,10 @@
+# The Slurm node with vLLM CPU copied in (its Python is uv's standalone
+# CPython, which runs on Debian). Build after Dockerfile:
+# docker build -f e2e/slurm-node/Dockerfile.vllm -t llmflow-slurm-vllm e2e/slurm-node
+FROM vllm/vllm-openai-cpu:nightly-arm64 AS vllm
+FROM llmflow-slurm-e2e
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      libnuma1 libgomp1 libtcmalloc-minimal4t64 && rm -rf /var/lib/apt/lists/*
+COPY --from=vllm /opt/uv /opt/uv
+COPY --from=vllm /opt/venv /opt/venv
+ENV PATH=/opt/venv/bin:$PATH

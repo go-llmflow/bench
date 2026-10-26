@@ -302,6 +302,66 @@ observed with dex rotating every 30 s), go-llmflow/gateway#61 (README says
 https only; http to a loopback issuer is accepted), go-authn/bridge#79 (no
 documented signing-key rotation procedure; the one tested here works).
 
+## Fake slurmrestd and e2e: Slurm discovery (since v0.5.0)
+
+The package `fakeupstream` provides `Slurmrestd`, a fake slurmrestd.
+- `GET /slurm/<version>/jobs/` answers the jobs given to `SetJobs`, in the shape of `OPENAPI_JOB_INFO_RESP`.
+- The `job_state` field is a flag array, for example `["RUNNING"]` or `["RUNNING","COMPLETING"]`.
+- A request must carry `X-SLURM-USER-TOKEN` set to `Token`.
+- `SetDown(true)` simulates an outage: the server answers 502.
+
+The fake tests the gateway's Slurm discovery (go-llmflow/gateway#75) without a cluster.
+
+`e2e/slurm_test.go` (`TestSlurmDiscoveryE2E`) runs on a real Slurm node, as root. It does the following:
+1. Starts the gateway with a `slurm {}` model.
+2. Submits, with `sbatch --uid`, a job of user `alice` in account `physics` that claims the model. This job must never be trusted.
+3. Submits a job of `svc_llm` named `llmflow:llama:18100:3`, then waits for the pool's C to reach 3.
+4. Sends a chat request through the job.
+5. Runs `scancel` on the job, then checks that C falls back to 0 and the model is no longer served.
+
+| Variable | Meaning |
+|---|---|
+| `BENCH_SLURM_RESTD` | slurmrestd, e.g. `http://127.0.0.1:6820` |
+| `BENCH_SLURM_API` | data_parser version (default `v0.0.42`) |
+| `BENCH_SLURM_JWT_FILE` | output of `scontrol token username=svc_llm lifespan=7200` |
+| `BENCH_SLURM_JOB` | the job's command; `{PORT}` and `{KEYFILE}` (the vLLM key) are replaced |
+| `BENCH_SLURM_MODEL`, `BENCH_SLURM_MEM`, `BENCH_SLURM_WAIT` | model id served, job memory, wait for admission |
+
+### How Slurm was run (2026-10-26, arm64)
+
+The setup is one Debian trixie container with Slurm 24.11.5:
+- packages `slurmctld`, `slurmd`, `slurmrestd`, `slurm-wlm-jwt-plugin` and `munge`;
+- `AuthAltTypes=auth/jwt`;
+- `slurmrestd -a rest_auth/jwt -s openapi/slurmctld`, run as an unprivileged user. Its data_parser versions are v0.0.40 to v0.0.42.
+
+The container runs with `--privileged`, because slurmrestd needs to unshare namespaces. For the vLLM run, `/opt/uv` and `/opt/venv` are copied from `vllm/vllm-openai-cpu:nightly-arm64`. The job serves `Qwen/Qwen2.5-0.5B-Instruct` and reads its key into `VLLM_API_KEY`, never through `--api-key`.
+
+The files are in `e2e/slurm-node/`. Run them like this:
+
+```sh
+docker run -d --privileged --shm-size=2g --name slurm --hostname c1 \
+  -v $PWD/out:/e2e -v ~/.cache/huggingface:/hf:ro llmflow-slurm-vllm
+docker exec slurm sh -c 'scontrol token username=svc_llm lifespan=7200 > /e2e/jwt.env'
+docker exec -e BENCH_SLURM_RESTD=http://127.0.0.1:6820 -e BENCH_SLURM_JWT_FILE=/e2e/jwt.env \
+  -e BENCH_SLURM_MODEL=Qwen/Qwen2.5-0.5B-Instruct -e BENCH_SLURM_MEM=4500M -e BENCH_SLURM_WAIT=8m \
+  -e 'BENCH_SLURM_JOB=/e2e/vllm-job.sh {PORT} {KEYFILE}' -e BENCH_GATEWAY_BIN=/e2e/llmflow-gateway \
+  -w /tmp slurm /e2e/e2e.test -test.run TestSlurmDiscoveryE2E -test.v
+```
+
+Here `e2e.test` is `GOOS=linux go test -c ./e2e`, and the gateway and `vllm-job.sh` are copied into `out/`.
+
+### Results (2026-10-26, gateway #77 head, Slurm 24.11.5, data_parser v0.0.42)
+
+| Job | Result |
+|---|---|
+| `fakevllm` | admitted 2 s after `sbatch`, removed 2 s after `scancel` |
+| vLLM CPU (Qwen2.5-0.5B, `--enforce-eager`) | admitted 18 s after `sbatch` (once `/health` and `/v1/models` answered), chat request 200, removed 2 s after `scancel` |
+| `alice`/`physics` job claiming the model | rejected once (`reason="account"`) and never contacted |
+
+Two earlier vLLM runs failed inside vLLM: once from too little `/dev/shm`, once because torch inductor found no C++ compiler. Each time the job kept `RUNNING` with `/health` down, and the gateway correctly never admitted it.
+
+## Development
+
 ## Development
 
 ```sh
