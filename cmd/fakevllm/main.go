@@ -87,6 +87,14 @@ func RootCmd() *cobra.Command {
 	f.DurationVar(&opt.Delay, "delay", 0, "delay before every answer")
 	f.DurationVar(&opt.TokenDelay, "token-delay", 0, "delay between two streamed chunks")
 	f.Int64Var(&opt.MaxBody, "max-body", 1<<20, "largest request body accepted")
+	// The Anthropic API's own behaviour, for gateways that front it.
+	f.IntVar(&opt.Status, "status", 0, "answer every POST with this status and an Anthropic error body (429, 529, …)")
+	f.StringVar(&opt.RetryAfter, "retry-after", "", "retry-after header of --status answers")
+	f.IntVar(&opt.CacheRead, "cache-read", 0, "cache_read_input_tokens of every /v1/messages answer")
+	f.IntVar(&opt.CacheWrite5m, "cache-write-5m", 0, "5-minute prompt-cache writes of every /v1/messages answer")
+	f.IntVar(&opt.CacheWrite1h, "cache-write-1h", 0, "1-hour prompt-cache writes of every /v1/messages answer")
+	f.StringVar(&opt.Workspace, "workspace", "", "anthropic-workspace-id header of /v1/messages answers")
+	f.BoolVar(&opt.RateLimitHeaders, "ratelimit-headers", false, "send anthropic-ratelimit-* headers on /v1/messages answers")
 	ready = onListen
 	return cmd
 }

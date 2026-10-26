@@ -206,7 +206,7 @@ func TestMessagesSSE(t *testing.T) {
 	srv, _ := newTest(t, Options{Reply: "a b"})
 	resp := post(t, srv.URL+"/v1/messages", `{"stream":true,"messages":[{"role":"user","content":"q"}]}`, nil)
 	events, datas := readSSE(t, resp.Body)
-	want := []string{"message_start", "content_block_start", "content_block_delta", "content_block_delta", "content_block_stop", "message_delta", "message_stop"}
+	want := []string{"message_start", "ping", "content_block_start", "content_block_delta", "content_block_delta", "content_block_stop", "message_delta", "message_stop"}
 	if strings.Join(events, ",") != strings.Join(want, ",") {
 		t.Fatalf("events %v", events)
 	}
