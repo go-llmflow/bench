@@ -42,7 +42,7 @@ jobs:
           go-version: stable
           check-latest: true
       - name: fuzz
-        run: go test -run='^$' -fuzz='^FuzzServe$' -fuzztime=30s ./cmd/fakevllm
+        run: go test -run='^$' -fuzz='^FuzzServe$' -fuzztime=30s ./fakeupstream
 
   build:
     name: cross-build CGO_ENABLED=0 ${{ matrix.goos }}/${{ matrix.goarch }}

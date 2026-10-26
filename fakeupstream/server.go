@@ -1,4 +1,8 @@
-package main
+// Package fakeupstream is a recording fake vLLM: it answers OpenAI chat
+// completions (JSON or SSE) and the Anthropic Messages API (JSON or SSE),
+// and hands every request it receives to a recorder. cmd/fakevllm serves
+// it; tests embed it with net/http/httptest.
+package fakeupstream
 
 import (
 	"encoding/json"
