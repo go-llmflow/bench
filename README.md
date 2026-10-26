@@ -186,6 +186,11 @@ timing.
 | (d) rerank v1 and v2 | `TestRerankThroughGateway` | pass | Paris ranked first (0.998), `prompt_tokens` 34 |
 | (e) accounting | `TestAccountingMatchesVLLM` | pass | chat JSON + chat stream (no client usage) + Messages + Responses: vLLM counted 132 prompt / 44 generated, the gateway charged 132 / 44 |
 | vLLM beyond `--max-num-seqs` | `TestVLLMQueuesInsteadOfRefusing` | pass | 6 concurrent requests with 2 slots: six 200, no 429 or 503 |
+| fallback on saturation (gateway v0.11.0, #58) | `TestFallbackOnSaturation` | pass | two borrowing streams of b1 fill pool `cpu` (C = 2); the next b1 request is served by `chat-spare` (`X-Llmflow-Model`), a1's within-share request stays on `chat`; `llmflow_fallbacks_total{reason="saturated"}` = 1. Run on 2026-10-26 with `--max-num-seqs 4` (both pools on one vLLM), gateway built from go-llmflow/gateway#66 |
+
+`TestFallbackOnSaturation` needs `BENCH_VLLM_MAX_NUM_SEQS=4` (a vLLM started
+with `--max-num-seqs 4`) and a gateway of v0.11.0 or later; it skips
+otherwise.
 
 Not covered: audio transcription (no Whisper model run on CPU), throughput
 (deliberately not measured here).
