@@ -9,7 +9,8 @@ Measuring tools for LLM gateways such as
 | [`cmd/fakevllm`](cmd/fakevllm) | a recording fake vLLM: answers OpenAI chat completions (JSON or SSE) and the Anthropic Messages API (JSON or SSE), and writes every request it receives (method, path, headers, body) as one JSON line |
 | [`e2e`](e2e) | end-to-end checks of llmflow-gateway in front of a **real** vLLM: fair-share priorities and preemption, prefix-cache isolation, Responses / Messages / tokenize / embeddings / rerank, accounting |
 | [`e2e/oidc`](e2e/oidc) | end-to-end checks of llmflow-gateway's OpenID Connect paths against **real** identity providers, dex and go-authn/bridge (behind a test SAML IdP): JWT access tokens, refusals, key rotation, SSO with PKCE, cross-organisation isolation, SCIM |
-| [`fakeupstream`](fakeupstream) | the fake vLLM as a Go package, for tests that embed it with `httptest` |
+| [`e2e/anthropic`](e2e/anthropic) | end-to-end checks of llmflow-gateway's opt-in Anthropic upstream: per-organisation keys, egress masking, USD accounting, retry-after; against the fake API, or the real one with a key file |
+| [`fakeupstream`](fakeupstream) | the fake vLLM as a Go package, for tests that embed it with `httptest`; also mimics Anthropic's API (429/529, retry-after, prompt-cache usage, workspace and rate-limit headers) |
 
 ```sh
 go install github.com/go-llmflow/bench/cmd/gwbench@latest
@@ -112,6 +113,49 @@ References for the answer shapes: the Anthropic
 [streaming messages](https://platform.claude.com/docs/en/build-with-claude/streaming)
 event sequence, and vLLM's own OpenAI-compatible server (the usage chunk
 with empty `choices`, `data: [DONE]`).
+
+### Anthropic API mode (since v0.4.0)
+
+To test a gateway in front of Anthropic's API without a key, fakevllm
+reproduces the behaviour a gateway must handle there (references opened
+2026-10-26: platform.claude.com/docs `api/errors`, `api/rate-limits`,
+`build-with-claude/prompt-caching`):
+
+| flag | effect |
+|---|---|
+| `--status 429` / `529` / … | every POST answers this status with an Anthropic error body (`rate_limit_error`, `overloaded_error`, `api_error`); `GET /v1/models` still answers |
+| `--retry-after 30` | the `retry-after` header of those answers |
+| `--cache-read N`, `--cache-write-5m N`, `--cache-write-1h N` | prompt-cache usage on `/v1/messages`: `cache_read_input_tokens`, `cache_creation_input_tokens` and its split `cache_creation.ephemeral_5m/1h_input_tokens`. `input_tokens` stays the uncached prompt |
+| `--workspace ID` / `per-key` | `anthropic-workspace-id` on `/v1/messages` answers; `per-key` derives one workspace per `x-api-key`, as Anthropic resolves a key to its workspace |
+| `--ratelimit-headers` | `anthropic-ratelimit-*` headers, so a test can check a gateway does not pass them on |
+
+Streams now carry Anthropic's `ping` event after `message_start`. In Go,
+`fakeupstream.Server.SetStatus` switches the status while serving.
+
+## e2e/anthropic: llmflow-gateway in front of Anthropic
+
+`e2e/anthropic` runs the `llmflow-gateway` binary (`BENCH_GATEWAY_BIN`,
+v0.12.0 or later) with an Anthropic model for two organisations, each with
+its own key. The fake API is `fakeupstream` in Anthropic mode. The test
+checks:
+- the provider receives the organisation's key, never the client's credential or the OAuth beta;
+- PII is masked and `cache_salt` and `priority` are gone before egress;
+- streams go through, and `/v1/chat/completions` is refused;
+- the spend report is in USD and equals the price list applied to the provider's usage (reads, 5-minute and 1-hour writes, output);
+- a 429 with `retry-after` makes the gateway answer 429 itself, without calling the provider, for that organisation only, until the wait is over.
+
+`TestGatewayInFrontOfRealAnthropic` repeats a minimal exchange against
+`https://api.anthropic.com` when `BENCH_ANTHROPIC_KEY_FILE` names a file
+holding an API key (`BENCH_ANTHROPIC_MODEL`, default `claude-haiku-5-5`).
+The variable names a file: a key never goes in the environment or a command
+line. It is skipped otherwise; it was not run for v0.4.0, since no key was
+available.
+
+```sh
+BENCH_GATEWAY_BIN=$(go env GOPATH)/bin/llmflow-gateway go test -v ./e2e/anthropic
+```
+
+On 2026-10-26, with llmflow-gateway v0.12.0, the fake-API test passes.
 
 ## e2e: llmflow-gateway against a real vLLM
 

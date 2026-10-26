@@ -5,10 +5,13 @@
 package fakeupstream
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -30,6 +33,23 @@ type Options struct {
 	Delay      time.Duration // before the first byte of every answer
 	TokenDelay time.Duration // between two SSE chunks
 	MaxBody    int64         // request bodies above this are refused with 413
+
+	// Status, when set, answers every POST with it and an Anthropic error
+	// body (rate_limit_error for 429, overloaded_error for 529, api_error
+	// otherwise), with RetryAfter as retry-after when set
+	// (platform.claude.com/docs/en/api/errors and /api/rate-limits).
+	Status     int
+	RetryAfter string
+	// CacheRead, CacheWrite5m and CacheWrite1h are the prompt-cache usage of
+	// a /v1/messages answer, as Anthropic reports it: input_tokens is then
+	// the uncached prompt only, cache_creation_input_tokens the sum of the
+	// writes, split in cache_creation
+	// (platform.claude.com/docs/en/build-with-claude/prompt-caching).
+	CacheRead, CacheWrite5m, CacheWrite1h int
+	// Workspace is sent as anthropic-workspace-id on /v1/messages answers;
+	// RateLimitHeaders adds anthropic-ratelimit-* headers to them.
+	Workspace        string
+	RateLimitHeaders bool
 }
 
 // Server is an OpenAI- and Anthropic-compatible fake upstream that records
@@ -97,6 +117,30 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if s.opt.Delay > 0 {
 		time.Sleep(s.opt.Delay)
 	}
+	if r.URL.Path == "/v1/messages" {
+		switch {
+		case s.opt.Workspace == "per-key" && r.Header.Get("X-Api-Key") != "":
+			// One workspace per API key, as Anthropic resolves a key to
+			// the workspace it belongs to.
+			sum := sha256.Sum256([]byte(r.Header.Get("X-Api-Key")))
+			w.Header().Set("Anthropic-Workspace-Id", "wrkspc_"+hex.EncodeToString(sum[:6]))
+		case s.opt.Workspace != "" && s.opt.Workspace != "per-key":
+			w.Header().Set("Anthropic-Workspace-Id", s.opt.Workspace)
+		}
+		w.Header().Set("Request-Id", "req_fake")
+		if s.opt.RateLimitHeaders {
+			w.Header().Set("Anthropic-Ratelimit-Requests-Limit", "1000")
+			w.Header().Set("Anthropic-Ratelimit-Requests-Remaining", "999")
+			w.Header().Set("Anthropic-Ratelimit-Tokens-Remaining", "1000000")
+		}
+	}
+	s.mu.Lock()
+	status, retryAfter := s.opt.Status, s.opt.RetryAfter
+	s.mu.Unlock()
+	if status != 0 && r.Method == http.MethodPost {
+		s.fail(w, status, retryAfter)
+		return
+	}
 	words := strings.Fields(s.opt.Reply)
 	switch {
 	case r.URL.Path == "/v1/messages" && req.Stream:
@@ -106,7 +150,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"id": "msg_fake", "type": "message", "role": "assistant", "model": s.opt.Model,
 			"content":     []any{map[string]any{"type": "text", "text": s.opt.Reply}},
 			"stop_reason": "end_turn", "stop_sequence": nil,
-			"usage": map[string]any{"input_tokens": prompt, "output_tokens": len(words)},
+			"usage": s.anthropicUsage(prompt, len(words)),
 		})
 	case req.Stream:
 		s.chatSSE(w, words, prompt, req.StreamOptions.IncludeUsage)
@@ -117,6 +161,43 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"usage":   usage(prompt, len(words)),
 		})
 	}
+}
+
+// anthropicUsage is the usage of a Messages answer: the prompt words are
+// the uncached input, the configured cache reads and writes come on top.
+func (s *Server) anthropicUsage(prompt, output int) map[string]any {
+	u := map[string]any{"input_tokens": prompt, "output_tokens": output}
+	if s.opt.CacheRead > 0 || s.opt.CacheWrite5m > 0 || s.opt.CacheWrite1h > 0 {
+		u["cache_read_input_tokens"] = s.opt.CacheRead
+		u["cache_creation_input_tokens"] = s.opt.CacheWrite5m + s.opt.CacheWrite1h
+		u["cache_creation"] = map[string]any{"ephemeral_5m_input_tokens": s.opt.CacheWrite5m, "ephemeral_1h_input_tokens": s.opt.CacheWrite1h}
+	}
+	return u
+}
+
+// SetStatus changes Options.Status and RetryAfter while serving (0: answer
+// normally again).
+func (s *Server) SetStatus(status int, retryAfter string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.opt.Status, s.opt.RetryAfter = status, retryAfter
+}
+
+// fail answers with status and an Anthropic error body.
+func (s *Server) fail(w http.ResponseWriter, status int, retryAfter string) {
+	typ := "api_error"
+	switch status {
+	case http.StatusTooManyRequests:
+		typ = "rate_limit_error"
+	case 529, http.StatusServiceUnavailable:
+		typ = "overloaded_error"
+	}
+	if retryAfter != "" {
+		w.Header().Set("Retry-After", retryAfter)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]any{"type": "error", "error": map[string]any{"type": typ, "message": "fakevllm: answering " + strconv.Itoa(status)}, "request_id": "req_fake"})
 }
 
 func usage(prompt, completion int) map[string]any {
@@ -219,7 +300,8 @@ func (s *Server) messagesSSE(w http.ResponseWriter, words []string, prompt int) 
 	out := newSSE(w)
 	out.send("message_start", map[string]any{"type": "message_start", "message": map[string]any{
 		"id": "msg_fake", "type": "message", "role": "assistant", "content": []any{}, "model": s.opt.Model,
-		"stop_reason": nil, "stop_sequence": nil, "usage": map[string]any{"input_tokens": prompt, "output_tokens": 0}}})
+		"stop_reason": nil, "stop_sequence": nil, "usage": s.anthropicUsage(prompt, 0)}})
+	out.send("ping", map[string]any{"type": "ping"})
 	out.send("content_block_start", map[string]any{"type": "content_block_start", "index": 0, "content_block": map[string]any{"type": "text", "text": ""}})
 	for i, wd := range words {
 		if i > 0 {
