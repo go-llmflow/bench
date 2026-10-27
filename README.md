@@ -302,6 +302,41 @@ observed with dex rotating every 30 s), go-llmflow/gateway#61 (README says
 https only; http to a loopback issuer is accepted), go-authn/bridge#79 (no
 documented signing-key rotation procedure; the one tested here works).
 
+## e2e: HA mutual TLS between two replicas (since v0.6.0)
+
+`TestHAMutualTLSLive` (`e2e/ha_mtls_test.go`) proves that two llmflow-gateway
+replicas really complete a mutual TLS 1.3 handshake on the HA internal port,
+with certificate **files** (multi-line PEM) loaded through the configuration:
+the path that v0.16.0 broke (every real PEM file was refused: "holds more
+than one line") and v0.16.1 fixed. It needs the gateway binary
+(`BENCH_GATEWAY_BIN`, v0.16.1 or later) and docker for a throw-away
+PostgreSQL (`BENCH_PG_IMAGE`, default `postgres:18`, trust authentication, a
+random loopback port, removed at the end). It needs no vLLM: the upstream is
+a fake with a gate. It skips, with the reason, when docker or the image is
+unavailable.
+
+1. A CA and two replica certificates (SAN `DNS:llmflow-ha`; ECDSA for A,
+   Ed25519 for B) are generated in Go and written as PEM files, keys mode
+   0600. `check-config` accepts them.
+2. Replica A starts and takes the pool's lease; replica B starts.
+3. Requests go through B, the non-owner: all are 200 at priority 0,
+   `llmflow_ha_unowned_total` stays 0 on B, and while three requests are held
+   at the fake upstream the **owner's** `llmflow_inflight` reads 3 (B's
+   `llmflow_ha_local_grants` too): the grants crossed the mTLS channel.
+4. **Control.** B restarts with a certificate another CA signed. It loads, but
+   the owner does not answer: its requests are admitted without an owner
+   (`llmflow_ha_unowned_total` 3, priority not 0). If this did not fail, step
+   3 would prove nothing about the handshake.
+
+```sh
+go install github.com/go-llmflow/gateway/cmd/llmflow-gateway@v0.16.1
+BENCH_GATEWAY_BIN=$(go env GOPATH)/bin/llmflow-gateway go test -v -run TestHAMutualTLSLive ./e2e
+```
+
+Run on 2026-10-27 with llmflow-gateway v0.16.1 and PostgreSQL 18 (docker): pass
+in 7 s. With a v0.16.0 binary the same test fails at `check-config`
+(`secret … holds more than one line`), as it should.
+
 ## Fake slurmrestd and e2e: Slurm discovery (since v0.5.0)
 
 The package `fakeupstream` provides `Slurmrestd`, a fake slurmrestd.
