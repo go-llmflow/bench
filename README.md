@@ -233,6 +233,43 @@ timing.
 | vLLM beyond `--max-num-seqs` | `TestVLLMQueuesInsteadOfRefusing` | pass | 6 concurrent requests with 2 slots: six 200, no 429 or 503 |
 | fallback on saturation (gateway v0.11.0, #58) | `TestFallbackOnSaturation` | pass | two borrowing streams of b1 fill pool `cpu` (C = 2); the next b1 request is served by `chat-spare` (`X-Llmflow-Model`), a1's within-share request stays on `chat`; `llmflow_fallbacks_total{reason="saturated"}` = 1. Run on 2026-10-26 with `--max-num-seqs 4` (both pools on one vLLM), gateway built from go-llmflow/gateway#66 |
 
+### Hard budgets: usage ≤ W (gateway v0.17.0, #87)
+
+`TestHardBudgetUsageWithinW` sends requests through a gateway whose team
+has a budget. For each one, vLLM's usage must stay within the worst case W
+the gateway held: `W = prompts · max((L−M)·p_in + n·M·p_out, L·p_in)`, with
+`L` vLLM's `max_model_len` (its `/v1/models`) and `M` the `max_tokens`
+sent (the client's, or the gateway's in `X-Llmflow-Max-Tokens`). The test
+checks the tokens (prompt ≤ prompts·L, completion ≤ prompts·n·M) and the
+cost. It also checks that the ledger never passes the limit, and that a
+budget below the smallest W refuses with 429 before vLLM sees anything.
+
+Run on 2026-10-28 with vLLM 0.32.1rc1 nightly CPU, Qwen2.5-0.5B-Instruct,
+`--max-model-len 512 --max-num-seqs 2`, and gateway v0.17.0:
+
+```sh
+docker run -d --shm-size=1g -p 127.0.0.1:8000:8000 -e VLLM_CPU_KVCACHE_SPACE=1 \
+  vllm/vllm-openai-cpu:nightly-arm64 --model Qwen/Qwen2.5-0.5B-Instruct \
+  --dtype bfloat16 --max-model-len 512 --max-num-seqs 2
+BENCH_VLLM_URL=http://127.0.0.1:8000 go test -v -run TestHardBudgetUsageWithinW ./e2e
+```
+
+(Without `--shm-size`, the nightly fails at start: "Insufficient space in /dev/shm".)
+
+| request | M sent | usage (prompt / completion) | cost ≤ W |
+|---|---|---|---|
+| chat, no `max_tokens` | 512 (picked) | 35 / 149 | 0.780 ≤ 2.560 |
+| chat, `n` = 3 | 16 | 34 / 42 | 0.244 ≤ 0.736 |
+| chat, streamed | 32 | 34 / 32 | 0.194 ≤ 0.640 |
+| chat, prompt 488 tokens of 512 | 64 | 488 / 10 | 0.538 ≤ 0.768 |
+| same, no `max_tokens` | 512 (picked) | 488 / 24 | 0.608 ≤ 2.560 |
+| completions, 2 prompts, `n` = 2 | 8 | 9 / 32 | 0.169 ≤ 1.168 |
+
+The test prices are 1000 / 5000 / 100 per million tokens (input / output /
+cached). On a prompt near L, vLLM cut the output at `L − input` as
+`get_max_tokens` says, which is why W counts `L − M` input tokens beside `M`
+output tokens.
+
 `TestFallbackOnSaturation` needs `BENCH_VLLM_MAX_NUM_SEQS=4` (a vLLM started
 with `--max-num-seqs 4`) and a gateway of v0.11.0 or later; it skips
 otherwise.
