@@ -34,6 +34,13 @@ type Options struct {
 	TokenDelay time.Duration // between two SSE chunks
 	MaxBody    int64         // request bodies above this are refused with 413
 
+	// Generate, when positive, is the number of completion tokens the model
+	// wants to emit, as reported in usage. Like vLLM it stops at the request's
+	// max_tokens / max_completion_tokens when the body carries one, and emits
+	// all of them when it does not (vLLM then bounds generation only by the
+	// context window). Zero: the usage counts the words of Reply.
+	Generate int
+
 	// Status, when set, answers every POST with it and an Anthropic error
 	// body (rate_limit_error for 429, overloaded_error for 529, api_error
 	// otherwise), with RetryAfter as retry-after when set
@@ -109,8 +116,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		StreamOptions struct {
 			IncludeUsage bool `json:"include_usage"`
 		} `json:"stream_options"`
-		Messages json.RawMessage `json:"messages"`
-		System   json.RawMessage `json:"system"`
+		Messages            json.RawMessage `json:"messages"`
+		System              json.RawMessage `json:"system"`
+		MaxTokens           *int            `json:"max_tokens"`
+		MaxCompletionTokens *int            `json:"max_completion_tokens"`
 	}
 	_ = json.Unmarshal(body, &req) // a non-JSON body still gets a chat answer
 	prompt := countWords(req.Messages) + countWords(req.System)
@@ -142,6 +151,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	words := strings.Fields(s.opt.Reply)
+	generated := len(words)
+	if s.opt.Generate > 0 {
+		generated = s.opt.Generate
+		for _, limit := range []*int{req.MaxTokens, req.MaxCompletionTokens} {
+			if limit != nil && *limit < generated {
+				generated = *limit
+			}
+		}
+	}
 	switch {
 	case r.URL.Path == "/v1/messages/count_tokens":
 		// Anthropic's and vLLM's answer: the prompt's input tokens (here
@@ -157,12 +175,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"usage": s.anthropicUsage(prompt, len(words)),
 		})
 	case req.Stream:
-		s.chatSSE(w, words, prompt, req.StreamOptions.IncludeUsage)
+		s.chatSSE(w, words, prompt, generated, req.StreamOptions.IncludeUsage)
 	default:
 		writeJSON(w, map[string]any{
 			"id": "cmpl-1", "object": "chat.completion", "created": 1, "model": s.opt.Model,
 			"choices": []any{map[string]any{"index": 0, "message": map[string]any{"role": "assistant", "content": s.opt.Reply}, "finish_reason": "stop"}},
-			"usage":   usage(prompt, len(words)),
+			"usage":   usage(prompt, generated),
 		})
 	}
 }
@@ -272,7 +290,7 @@ func (s sse) send(event string, v any) {
 // chatSSE follows the OpenAI chat.completion.chunk stream as vLLM emits it:
 // a role chunk, one chunk per piece of content, a finish chunk, the usage
 // chunk (empty choices) when include_usage is set, then "data: [DONE]".
-func (s *Server) chatSSE(w http.ResponseWriter, words []string, prompt int, withUsage bool) {
+func (s *Server) chatSSE(w http.ResponseWriter, words []string, prompt, generated int, withUsage bool) {
 	out := newSSE(w)
 	chunk := func(delta map[string]any, finish any) map[string]any {
 		return map[string]any{"id": "chatcmpl-fake", "object": "chat.completion.chunk", "created": 1, "model": s.opt.Model,
@@ -289,7 +307,7 @@ func (s *Server) chatSSE(w http.ResponseWriter, words []string, prompt int, with
 	out.send("", chunk(map[string]any{}, "stop"))
 	if withUsage {
 		out.send("", map[string]any{"id": "chatcmpl-fake", "object": "chat.completion.chunk", "created": 1, "model": s.opt.Model,
-			"choices": []any{}, "usage": usage(prompt, len(words))})
+			"choices": []any{}, "usage": usage(prompt, generated)})
 	}
 	fmt.Fprint(w, "data: [DONE]\n\n")
 	if out.f != nil {
