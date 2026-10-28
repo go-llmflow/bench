@@ -101,6 +101,9 @@ fakevllm --addr 127.0.0.1:18000 --out requests.jsonl --model fake --reply "ok"
 Usage is predictable: one prompt token per whitespace-separated word of the
 request's message and system strings, one completion token per word of
 `--reply`. `--delay` and `--token-delay` slow the answer and the stream.
+`--generate N` (since v0.8.0) reports N completion tokens instead, capped by
+the request's `max_tokens` / `max_completion_tokens` when it has one, as vLLM
+does.
 
 Every request is appended to `--out` (mode 0600) as
 `{"method","path","headers","body"}`; a body that is not JSON is recorded as
@@ -276,6 +279,65 @@ otherwise.
 
 Not covered: audio transcription (no Whisper model run on CPU), throughput
 (deliberately not measured here).
+
+## e2e: can LiteLLM exceed a `max_budget`? (since v0.8.0)
+
+`TestLiteLLMBudgetOvershoot` (`e2e/litellm_budget_test.go`) measures LiteLLM
+**v1.106.5**'s pre-call budget reservation
+(`litellm/proxy/spend_tracking/budget_reservation.py`, read at that version):
+- `_apply_over_budget_reservation_policy` (l.171-207) **resizes** a reservation
+  that does not fit to the room left and admits the request, unless
+  `general_settings.fail_closed_budget_enforcement` is true (l.196-201);
+- the reservation is `min(client max_tokens or 16384, model max_output_tokens or
+  16384)` output tokens (l.1651-1670), plus the input tokens counted by
+  `litellm.token_counter`;
+- no token price means no reservation (l.305-309).
+
+Each scenario starts a fresh PostgreSQL 18 and Redis 7 (docker, removed at the
+end), a fresh LiteLLM (`--num_workers 1`, Redis spend counters checked present
+in the end, `proxy_batch_write_at: 5`), and a team with `max_budget` and one
+key. The upstream is `fakeupstream` with `--generate`: like vLLM it stops at
+the request's `max_tokens` when there is one and otherwise generates its whole
+answer. Prices are declared in `model_info`: 1e-6 USD per input and per output
+token. Ten requests are sent at once, then the team's spend is read from
+`/team/info` once stable.
+
+| | config | max_budget | final spend | overshoot | admitted / refused | `max_tokens` upstream |
+|---|---|---|---|---|---|---|
+| 1 | default, client `max_tokens` 4000, model uses 4000 | 0.01 | 0.012006 | +0.002006 USD (**+20.1 %**) | 3 / 7 | 4000 (the client's) |
+| 2 | `fail_closed`, **no** client `max_tokens`, model emits 20000 | 0.05 | 0.060006 | +0.010006 USD (**+20.0 %**) | 3 / 7 | **none** (0 of 3 bodies) |
+| 3 | `fail_closed`, client `max_tokens` 4000 (control) | 0.01 | 0.008004 | none (-20 %) | 2 / 8 | 4000 |
+
+What this shows:
+1. In default mode the third request is resized to the 0.002 left and admitted,
+   although it really costs 0.004. The overshoot is bounded by one worst-case
+   request per budget (further requests find 0 left and get 422).
+2. Strict mode holds only when the model's output is bounded. Without a client
+   `max_tokens`, LiteLLM reserves 16384 tokens (0.016394 per request) but
+   **sends no bound upstream** (the fake recorded `{"model":…,"messages":…,
+   "stream":false}`), so a vLLM bounded only by its context window spent 20000.
+   Three requests fit the reservation (3 x 0.016394 <= 0.05) and cost 0.06.
+3. With an explicit `max_tokens` the bound reaches the model and strict mode
+   holds (control): the third request is refused, spend stays below the
+   budget. Once spend is over (1, 2), a later request is refused (422).
+
+Refusals are `HTTP 422 budget_exceeded`. Raw numbers, the configurations and
+the upstream bodies: `BENCH_LITELLM_RESULTS=file.json`. Not run: the optional
+fourth scenario (a prompt whose real token count exceeds LiteLLM's estimate),
+which needs a real Qwen tokenizer; a single run per scenario, on one machine,
+no timing involved. Run on 2026-10-28:
+
+```sh
+uv venv venv && uv pip install --python venv/bin/python 'litellm[proxy,extra_proxy]==1.106.5'
+PATH=$PWD/venv/bin:$PATH venv/bin/prisma generate --schema venv/lib/python3.12/site-packages/litellm/proxy/schema.prisma
+PATH=$PWD/venv/bin:$PATH BENCH_LITELLM_BIN=$PWD/venv/bin/litellm go test -v -run TestLiteLLMBudgetOvershoot ./e2e
+```
+
+`fakevllm --generate N` (and `fakeupstream.Options.Generate`) reports N
+completion tokens in the usage, capped by the request's `max_tokens` or
+`max_completion_tokens` when it carries one. The test skips without
+`BENCH_LITELLM_BIN` or docker (`BENCH_LITELLM_PG_IMAGE`,
+`BENCH_LITELLM_REDIS_IMAGE` override the images).
 
 ## e2e/oidc: llmflow-gateway against real identity providers
 

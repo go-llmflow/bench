@@ -87,6 +87,7 @@ func RootCmd() *cobra.Command {
 	f.DurationVar(&opt.Delay, "delay", 0, "delay before every answer")
 	f.DurationVar(&opt.TokenDelay, "token-delay", 0, "delay between two streamed chunks")
 	f.Int64Var(&opt.MaxBody, "max-body", 1<<20, "largest request body accepted")
+	f.IntVar(&opt.Generate, "generate", 0, "completion tokens reported in usage, capped by the request's max_tokens when it has one (0: the words of --reply)")
 	// The Anthropic API's own behaviour, for gateways that front it.
 	f.IntVar(&opt.Status, "status", 0, "answer every POST with this status and an Anthropic error body (429, 529, …)")
 	f.StringVar(&opt.RetryAfter, "retry-after", "", "retry-after header of --status answers")
