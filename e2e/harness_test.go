@@ -43,10 +43,11 @@ type upstream struct {
 
 // Gateway is one llmflow-gateway process in front of the vLLM servers.
 type Gateway struct {
-	URL  string
-	Keys map[string]string // team -> virtual key
-	cmd  *exec.Cmd
-	log  *bytes.Buffer
+	URL    string
+	Keys   map[string]string // team -> virtual key
+	Master string            // the master key (admin API), generated per run
+	cmd    *exec.Cmd
+	log    *bytes.Buffer
 }
 
 func vllmChat(t *testing.T) upstream {
@@ -225,6 +226,7 @@ func StartGatewayWith(t *testing.T, chat upstream, extra []upstream, names []str
 		time.Sleep(200 * time.Millisecond)
 	}
 	master, _ := os.ReadFile(filepath.Join(dir, "master.key"))
+	g.Master = strings.TrimSpace(string(master))
 	for _, team := range []string{"a1", "a2", "b1"} {
 		var k struct{ ID, Key string }
 		body := fmt.Sprintf(`{"team":%q,"name":"e2e"}`, team)
