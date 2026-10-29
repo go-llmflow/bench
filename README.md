@@ -10,6 +10,7 @@ Measuring tools for LLM gateways such as
 | [`e2e`](e2e) | end-to-end checks of llmflow-gateway in front of a **real** vLLM: fair-share priorities and preemption, prefix-cache isolation, Responses / Messages / tokenize / embeddings / rerank, accounting |
 | [`e2e/oidc`](e2e/oidc) | end-to-end checks of llmflow-gateway's OpenID Connect paths against **real** identity providers, dex and go-authn/bridge (behind a test SAML IdP): JWT access tokens, refusals, key rotation, SSO with PKCE, cross-organisation isolation, SCIM |
 | [`e2e/anthropic`](e2e/anthropic) | end-to-end checks of llmflow-gateway's opt-in Anthropic upstream: per-organisation keys, egress masking, USD accounting, retry-after; against the fake API, or the real one with a key file |
+| [`e2e/fluids`](e2e/fluids) | end-to-end check of llmflow-gateway's measured-energy accounting (gateway #97): a real gateway process scrapes a **fake NVIDIA DCGM exporter** while two organisations send chat requests, and `/admin/fluids` must return the energy the counters moved by, to the millijoule, through a driver reload and an exporter that is down; needs `BENCH_GATEWAY_BIN` (gateway v0.19.0 or later) and skips without it |
 | [`fakeupstream`](fakeupstream) | the fake vLLM as a Go package, for tests that embed it with `httptest`; also mimics Anthropic's API (429/529, retry-after, prompt-cache usage, workspace and rate-limit headers) |
 
 ```sh
