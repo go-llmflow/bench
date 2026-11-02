@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-fleettools/fleettools/loadavg"
 	"github.com/spf13/cobra"
 )
 
@@ -126,7 +127,7 @@ func runCmd() *cobra.Command {
 				if left < 0 {
 					left = 0
 				}
-				load0, err := WaitForLoad(cmd.Context(), LoadAvg1, maxLoad, left, 30*time.Second, func(l float64) {
+				load0, err := loadavg.Wait(cmd.Context(), maxLoad, left, 30*time.Second, func(l float64) {
 					fmt.Fprintf(out, "load %.2f > %.2f, waiting\n", l, maxLoad)
 				})
 				if err != nil {
@@ -140,7 +141,7 @@ func runCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				load1, _ := LoadAvg1()
+				load1, _ := loadavg.Avg1()
 				if load1 > maxLoad {
 					fmt.Fprintf(out, "run %d discarded: load %.2f -> %.2f\n", attempt, load0, load1)
 					continue
