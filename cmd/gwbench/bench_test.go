@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -167,66 +166,8 @@ func TestParseTarget(t *testing.T) {
 	}
 }
 
-func TestParseProcLoadavg(t *testing.T) {
-	v, err := parseProcLoadavg("7.38 11.68 12.61 3/1234 5678\n")
-	if err != nil || v != 7.38 {
-		t.Fatalf("got %v, %v", v, err)
-	}
-	if _, err := parseProcLoadavg(""); err == nil {
-		t.Fatal("empty input accepted")
-	}
-}
-
-func TestDecodeDarwinLoadavg(t *testing.T) {
-	var b bytes.Buffer
-	for _, v := range []uint32{7380, 11680, 12610, 0} { // 3 fixpt + padding
-		binary.Write(&b, binary.LittleEndian, v)
-	}
-	binary.Write(&b, binary.LittleEndian, int64(1000))
-	v, err := decodeDarwinLoadavg(b.Bytes())
-	if err != nil || v != 7.38 {
-		t.Fatalf("got %v, %v", v, err)
-	}
-	if _, err := decodeDarwinLoadavg(make([]byte, 8)); err == nil {
-		t.Fatal("short buffer accepted")
-	}
-}
-
-func TestLoadAvgReadsThisMachine(t *testing.T) {
-	v, err := LoadAvg1()
-	if err != nil {
-		t.Skip(err)
-	}
-	if v < 0 || v > 10000 {
-		t.Fatalf("implausible load %v", v)
-	}
-}
-
-func TestWaitForLoad(t *testing.T) {
-	seq := []float64{9, 8, 3}
-	i := 0
-	read := func() (float64, error) {
-		v := seq[i]
-		if i < len(seq)-1 {
-			i++
-		}
-		return v, nil
-	}
-	waits := 0
-	l, err := WaitForLoad(context.Background(), read, 4, time.Second, time.Millisecond, func(float64) { waits++ })
-	if err != nil || l != 3 || waits != 2 {
-		t.Fatalf("got load %v, err %v, waits %d", l, err, waits)
-	}
-	// Never drops: gives up at the deadline instead of measuring.
-	high := func() (float64, error) { return 9, nil }
-	if _, err := WaitForLoad(context.Background(), high, 4, 20*time.Millisecond, 5*time.Millisecond, nil); err == nil {
-		t.Fatal("measured under load")
-	}
-	// No wait: refuse at once.
-	if _, err := WaitForLoad(context.Background(), high, 4, 0, time.Hour, nil); err == nil {
-		t.Fatal("measured under load with wait=0")
-	}
-}
+// The load average reading and the wait live in, and are tested by,
+// github.com/go-fleettools/fleettools/loadavg.
 
 func TestRunCmdRefusesUnderLoad(t *testing.T) {
 	cmd := RootCmd()

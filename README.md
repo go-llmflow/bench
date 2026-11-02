@@ -508,7 +508,11 @@ CI runs gofmt, vet, the race tests on Linux amd64/arm64 and macOS, a fuzz
 smoke, `govulncheck`, and a `CGO_ENABLED=0` cross-build for Linux
 (amd64, arm64, riscv64, s390x, 386), macOS and Windows. The load gate reads
 `/proc/loadavg` on Linux and `sysctl vm.loadavg` on macOS; elsewhere it
-cannot read the load and refuses to measure.
+cannot read the load and refuses to measure. Since v0.7.1 that reading and the
+wait are the public package
+[`github.com/go-fleettools/fleettools/loadavg`](https://github.com/go-fleettools/fleettools)
+(`Avg1`, `Wait`), one implementation shared with fleettools' `abbench`, which
+gates on the same load with `--max-load`.
 
 ## License
 
