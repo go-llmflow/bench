@@ -3,8 +3,8 @@ module github.com/go-llmflow/bench
 go 1.27.3
 
 require (
-	github.com/go-authn/saml v0.5.0
-	github.com/go-fleettools/fleettools v0.71.0
+	github.com/go-authn/saml v0.5.1
+	github.com/go-fleettools/fleettools v0.72.0
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/crypto v0.58.0
 )
