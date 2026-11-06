@@ -57,6 +57,20 @@ func RootCmd() *cobra.Command {
 					return err
 				}
 				defer f.Close()
+				// OpenFile's mode applies to a new file only: a recording that
+				// exists already, with Authorization headers in it, is
+				// tightened (on the open file, not by name), and what is not a
+				// regular file is refused.
+				st, err := f.Stat()
+				if err != nil {
+					return err
+				}
+				if !st.Mode().IsRegular() {
+					return fmt.Errorf("--out %q is not a regular file", out)
+				}
+				if err := f.Chmod(0o600); err != nil {
+					return fmt.Errorf("--out %q: cannot restrict it to its owner: %w", out, err)
+				}
 				enc := json.NewEncoder(f)
 				rec = func(r Record) error { return enc.Encode(r) }
 			}

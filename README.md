@@ -106,7 +106,8 @@ request's message and system strings, one completion token per word of
 the request's `max_tokens` / `max_completion_tokens` when it has one, as vLLM
 does.
 
-Every request is appended to `--out` (mode 0600) as
+Every request is appended to `--out` (mode 0600: a file that exists already is
+tightened to 0600, and what is not a regular file is refused) as
 `{"method","path","headers","body"}`; a body that is not JSON is recorded as
 a string. **The recording holds the headers as received, `Authorization`
 included**: that is what a witness is for. Use test keys only. If the record
