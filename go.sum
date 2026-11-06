@@ -5,8 +5,8 @@ github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/go-authn/saml v0.5.1 h1:GI/OWubrPxr/ohXOhHg3W3DX2HjXEbNCCVP0W9F6wtA=
 github.com/go-authn/saml v0.5.1/go.mod h1:zmSqNnBAvVglMlcfZ0xiCdGMXSsLO8tPG9DGkAKPFNs=
-github.com/go-fleettools/fleettools v0.72.0 h1:Joq90NyYAGM0CjbOGhp5yfqkn3dehut3za03j0QLTIM=
-github.com/go-fleettools/fleettools v0.72.0/go.mod h1:1jBfM9ZgVxtnS+P4Pf0STzFHAQjZw8crJbodGohVvjc=
+github.com/go-fleettools/fleettools v0.79.0 h1:aD+IKbWi1KiRKYQpK7YhcKXSvn43+h577Kj7fY57pNk=
+github.com/go-fleettools/fleettools v0.79.0/go.mod h1:sX/jaI56ICzBlcrIWGUmQy/AG4drf/AWsUU77Xx2UNc=
 github.com/inconshreveable/mousetrap v1.1.0 h1:wN+x4NVGpMsO7ErUn/mUI3vEoE6Jt13X2s0bqwp9tc8=
 github.com/inconshreveable/mousetrap v1.1.0/go.mod h1:vpF70FUmC8bwa3OWnCshd2FqLfsEA9PFc4w1p2J65bw=
 github.com/jonboulle/clockwork v0.5.0 h1:Hyh9A8u51kptdkR+cqRpT1EebBwTn1oK9YfGYbdFz6I=
