@@ -49,8 +49,73 @@ func RootCmd() *cobra.Command {
 		Short:        "Chaos campaign for llmflow-gateway: faults in, invariants out",
 		SilenceUsage: true, SilenceErrors: true,
 	}
-	root.AddCommand(listCmd(), runCmd())
+	root.AddCommand(listCmd(), runCmd(), mergeCmd())
 	return root
+}
+
+func mergeCmd() *cobra.Command {
+	var (
+		seeds []int
+		table string
+	)
+	cmd := &cobra.Command{
+		Use:   "merge results.json...",
+		Short: "Merge the shards' results, write one table, fail on any problem",
+		Long: `Merge the JSON files written by "run --results" (one per shard) into one
+table. The exit status is 1 on a failed invariant, a broken, skipped or empty
+run, an N/A a scenario is not entitled to, or a scenario x seed of the
+catalogue that no shard ran.`,
+		Args: cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			var all []chaos.Result
+			for _, a := range args {
+				b, err := os.ReadFile(a)
+				if err != nil {
+					return err
+				}
+				var rs []chaos.Result
+				if err := json.Unmarshal(b, &rs); err != nil {
+					return fmt.Errorf("%s: %w", a, err)
+				}
+				all = append(all, rs...)
+			}
+			sort.SliceStable(all, func(i, j int) bool {
+				if all[i].Scenario != all[j].Scenario {
+					return catalogueIndex(all[i].Scenario) < catalogueIndex(all[j].Scenario)
+				}
+				return all[i].Seed < all[j].Seed
+			})
+			tb := chaos.Table(all)
+			if table != "" {
+				if err := os.WriteFile(table, []byte(tb), 0o600); err != nil {
+					return err
+				}
+			}
+			out := cmd.OutOrStdout()
+			fmt.Fprint(out, tb)
+			problems := chaos.Audit(all, seeds)
+			for _, p := range problems {
+				fmt.Fprintln(out, "PROBLEM", p)
+			}
+			fmt.Fprintf(out, "\n%d run(s), %d problem(s)\n", len(all), len(problems))
+			if len(problems) > 0 {
+				return failedError{len(problems)}
+			}
+			return nil
+		},
+	}
+	cmd.Flags().IntSliceVar(&seeds, "seed", []int{1}, "the seeds the campaign had to cover")
+	cmd.Flags().StringVar(&table, "table", "", "write the merged table (markdown) to this file")
+	return cmd
+}
+
+func catalogueIndex(name string) int {
+	for i, sc := range chaos.Catalogue() {
+		if sc.Name == name {
+			return i
+		}
+	}
+	return 1 << 30
 }
 
 func listCmd() *cobra.Command {
@@ -86,7 +151,7 @@ func runCmd() *cobra.Command {
 		gateway, workdir, pgFile string
 		seeds                    []int
 		all, asJSON, dry, strict bool
-		table                    string
+		table, resultsFile       string
 		maxLoad                  float64
 		loadWait                 time.Duration
 	)
@@ -175,6 +240,15 @@ environment) and are skipped, and said so, without it.`,
 					return err
 				}
 			}
+			if resultsFile != "" {
+				b, err := json.MarshalIndent(all, "", "  ")
+				if err != nil {
+					return err
+				}
+				if err := os.WriteFile(resultsFile, b, 0o600); err != nil {
+					return err
+				}
+			}
 			if asJSON {
 				enc := json.NewEncoder(out)
 				enc.SetIndent("", "  ")
@@ -197,6 +271,7 @@ environment) and are skipped, and said so, without it.`,
 	f.BoolVar(&asJSON, "json", false, "print the results as JSON")
 	f.BoolVar(&strict, "strict", false, "a skipped scenario (no PostgreSQL) is a failure: for CI")
 	f.StringVar(&table, "table", "", "write the scenario x seed x invariant table (markdown) to this file")
+	f.StringVar(&resultsFile, "results", "", "write the results as JSON to this file (input of: llmchaos merge)")
 	f.BoolVar(&dry, "check-config", false, "only generate every scenario's configuration and run the gateway's check-config on it; start nothing")
 	f.Float64Var(&maxLoad, "max-load", 8, "defer while the 1-minute load average is above this (0: no gate)")
 	f.DurationVar(&loadWait, "load-wait", 10*time.Minute, "how long to wait for the load to fall before giving up")

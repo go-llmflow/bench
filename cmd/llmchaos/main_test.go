@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"os"
 	"strings"
 	"testing"
 )
@@ -58,6 +59,26 @@ func TestRunRefusesAVolatileWorkdir(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "volatile") && !strings.Contains(err.Error(), "TMPDIR") {
 			t.Errorf("workdir %s: %v", dir, err)
 		}
+	}
+}
+
+func TestMergeFailsOnAnIncompleteCampaign(t *testing.T) {
+	dir := t.TempDir()
+	f := dir + "/r.json"
+	if err := os.WriteFile(f, []byte(`[{"Scenario":"baseline","Seed":1,"Requests":5,"Verdicts":[{"N":2,"Status":"FAIL","Detail":"planted"}]}]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := run(t, "merge", f)
+	if _, ok := err.(failedError); !ok {
+		t.Fatalf("err = %v, want failedError", err)
+	}
+	for _, want := range []string{"PROBLEM baseline/1: invariant 2 FAIL: planted", "missing from the campaign", "| baseline | 1 | 5 |"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("merge output lacks %q:\n%s", want, out)
+		}
+	}
+	if _, _, err := run(t, "merge", dir+"/absent.json"); err == nil {
+		t.Error("an absent shard must be an error")
 	}
 }
 

@@ -72,61 +72,6 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: go build -trimpath ./...
 
-  chaos:
-    # The chaos campaign against gateway releases, with the PostgreSQL and HA
-    # scenarios the workstation cannot run (no Docker there). It FAILS when an
-    # invariant breaks, when a scenario sent nothing, and (--strict) when a
-    # scenario was skipped: a check that cannot say "nothing ran" is not a
-    # check. Verdicts go to the job summary, the evidence is uploaded.
-    name: chaos campaign (PostgreSQL) gateway ${{ matrix.tag }}
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        tag: [v0.37.1, v0.38.0]
-    env:
-      GATEWAY_TAG: ${{ matrix.tag }}
-    services:
-      postgres:
-        image: postgres:17
-        env:
-          POSTGRES_PASSWORD: chaos-throwaway-ci # a service container that exists for this job only
-        ports: ['5432:5432']
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 12
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v5
-        with:
-          go-version: stable
-          check-latest: true
-      - name: the gateway under test
-        run: GOBIN="$GITHUB_WORKSPACE/.chaos-bin" go install "github.com/go-llmflow/gateway/cmd/llmflow-gateway@${GATEWAY_TAG}"
-      - name: the throwaway database's DSN, in a file
-        run: printf 'postgres://postgres:chaos-throwaway-ci@127.0.0.1:5432/postgres?sslmode=disable\n' > "$GITHUB_WORKSPACE/pg.dsn"
-      - name: campaign
-        run: >-
-          go run ./cmd/llmchaos run --all --strict --seed 1 --seed 2 --seed 3 --seed 4 --seed 5 --max-load 0
-          --gateway "$GITHUB_WORKSPACE/.chaos-bin/llmflow-gateway"
-          --workdir "$GITHUB_WORKSPACE/chaos-runs"
-          --pg-dsn-file "$GITHUB_WORKSPACE/pg.dsn"
-          --table "$GITHUB_WORKSPACE/chaos-table.md" > "$GITHUB_WORKSPACE/chaos-verdicts.txt" 2>&1
-      - name: verdicts
-        if: always()
-        run: cat "$GITHUB_WORKSPACE/chaos-table.md" "$GITHUB_WORKSPACE/chaos-verdicts.txt" >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: chaos-evidence-${{ matrix.tag }}
-          path: |
-            chaos-verdicts.txt
-            chaos-table.md
-            chaos-runs/*/evidence
-          retention-days: 30
-
   govulncheck:
     runs-on: ubuntu-latest
     steps:
