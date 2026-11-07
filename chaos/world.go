@@ -72,6 +72,10 @@ type World struct {
 	// killCovered counts answered requests whose bill the documented loss of a
 	// killed replica's queue may cover.
 	killCovered int
+	// fedProbes counts the harness's own probe requests (not in the ledger) that
+	// went through the federation prefix and were answered or refused: the
+	// dispatcher counts them, invariant 9 must too.
+	fedProbes float64
 	// oldToken is a token signed before a hard rotation, per IdP, kept to be
 	// presented afterwards.
 	oldToken map[string]string

@@ -173,10 +173,13 @@ func (w *World) schacSpoofProbe() (problems, notes []string) {
 		o := Do(context.Background(), NewClient(), w.Primary().URL, Req{ID: id, Org: c.Org, Team: c.Team, Who: c.Who, Prefix: c.Prefix, Cred: Cred{Bearer: tok}, MaxTokens: 16, Words: 4, Marker: fmt.Sprintf("MKprobe-schac-%d", id)})
 		return o.Status
 	}
-	if got := ask("eve@univ-c.example", 99_999_901); got != 200 {
-		problems = append(problems, fmt.Sprintf("schac control: a token scoped to its institution was answered %d (want 200): the probe proves nothing", got))
+	// 200, or 429 when the borrower's budget is spent by now: either way the
+	// token was accepted (authentication comes first), which is the control.
+	if got := ask("eve@univ-c.example", 99_999_901); got != 200 && got != 429 {
+		problems = append(problems, fmt.Sprintf("schac control: a token scoped to its institution was answered %d (want 200, or 429 with a spent budget): the probe proves nothing", got))
 		return
 	}
+	w.fedProbes++
 	if got := ask("eve@univ-e.example", 99_999_902); got != 401 {
 		problems = append(problems, fmt.Sprintf("schac spoof: a token named eve@univ-e.example stating schac_home_organization=univ-c.example was answered %d (want 401: the name's scope must equal a value of the claim)", got))
 	} else {
