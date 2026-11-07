@@ -85,7 +85,8 @@ func runCmd() *cobra.Command {
 	var (
 		gateway, workdir, pgFile string
 		seeds                    []int
-		all, asJSON, dry         bool
+		all, asJSON, dry, strict bool
+		table                    string
 		maxLoad                  float64
 		loadWait                 time.Duration
 	)
@@ -159,12 +160,19 @@ environment) and are skipped, and said so, without it.`,
 					if !asJSON {
 						printResult(out, res)
 					}
-					if res.Failed() {
+					// --strict: a scenario that was skipped (no PostgreSQL) judged
+					// nothing, which in CI is a failure.
+					if res.Failed() || strict && !dry && res.Skipped != "" {
 						failed++
 					}
 					if ctx.Err() != nil {
 						break
 					}
+				}
+			}
+			if table != "" {
+				if err := os.WriteFile(table, []byte(chaos.Table(all)), 0o600); err != nil {
+					return err
 				}
 			}
 			if asJSON {
@@ -187,6 +195,8 @@ environment) and are skipped, and said so, without it.`,
 	f.IntSliceVar(&seeds, "seed", []int{1}, "seed(s): the same scenario and seed replay the same plan")
 	f.BoolVar(&all, "all", false, "run every scenario")
 	f.BoolVar(&asJSON, "json", false, "print the results as JSON")
+	f.BoolVar(&strict, "strict", false, "a skipped scenario (no PostgreSQL) is a failure: for CI")
+	f.StringVar(&table, "table", "", "write the scenario x seed x invariant table (markdown) to this file")
 	f.BoolVar(&dry, "check-config", false, "only generate every scenario's configuration and run the gateway's check-config on it; start nothing")
 	f.Float64Var(&maxLoad, "max-load", 8, "defer while the 1-minute load average is above this (0: no gate)")
 	f.DurationVar(&loadWait, "load-wait", 10*time.Minute, "how long to wait for the load to fall before giving up")

@@ -27,6 +27,10 @@ func (r Result) Failed() bool {
 	if r.Err != "" {
 		return true
 	}
+	// A run that sent nothing judged nothing: it is a failure, never a pass.
+	if r.Skipped == "" && r.Requests == 0 {
+		return true
+	}
 	for _, v := range r.Verdicts {
 		if v.Status == Fail {
 			return true
@@ -67,7 +71,7 @@ func Run(ctx context.Context, opt Options, sc *Scenario) (res Result) {
 		return res
 	}
 	if sc.needs("pg") && opt.PG == "" {
-		res.Skipped = "needs PostgreSQL (LLMCHAOS_PG_DSN); run in CI"
+		res.Skipped = "needs PostgreSQL (--pg-dsn-file); run in CI"
 		return res
 	}
 	w, err := Setup(ctx, opt, sc)

@@ -52,9 +52,12 @@ type Scenario struct {
 	Duration time.Duration
 	// UpstreamLatency is how long the fake model takes to start an answer.
 	UpstreamLatency time.Duration
-	Load            map[string]OrgLoad
-	Faults          []FaultAt
-	Bursts          []Burst
+	// PrioritySlots > 0: the upstream runs that many requests and queues the
+	// rest by (X-Vllm-Priority, arrival), as vLLM's priority scheduler does.
+	PrioritySlots int
+	Load          map[string]OrgLoad
+	Faults        []FaultAt
+	Bursts        []Burst
 	// Skip lists invariants that do not apply here, with the reason, so that a
 	// verdict reads NOT APPLICABLE instead of a pass that checked nothing.
 	Skip map[int]string

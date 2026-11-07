@@ -74,6 +74,7 @@ func Catalogue() []*Scenario {
 			F:               Features{Fluids: true, Federation: true, IdPs: true, BMC: true},
 			Duration:        s(26),
 			UpstreamLatency: 150 * time.Millisecond,
+			PrioritySlots:   PoolCapacity,
 			Load: map[string]OrgLoad{
 				"tiers": {Workers: 16, Think: 20 * time.Millisecond, StreamPct: 30, Tokens: []int{32}, Words: []int{30}},
 				"etabA": {Workers: 10, Start: s(6), Think: 20 * time.Millisecond, StreamPct: 30, Tokens: []int{32}, Words: []int{8}},
@@ -103,8 +104,37 @@ func Catalogue() []*Scenario {
 			FaultAt{Kind: "pg-slow", At: s(6), For: s(8), Arg: 400}),
 		haBase("ha-kill-during-pg-restart", "combined: a replica is killed while PostgreSQL is down, and restarts after it is back",
 			FaultAt{Kind: "pg-restart", At: s(6), For: s(5)}, FaultAt{Kind: "replica-kill", Target: "r1", At: s(8), For: s(6)}),
+		pgOne("month-close-during-traffic", "the month that has just ended is closed (POST /admin/billing/close) while traffic runs: its reports must not change, and it cannot be closed twice",
+			Features{Fluids: true, BMC: true, Budgets: true}, FaultAt{Kind: "month-close", At: s(5)}),
+		pgOne("migrate-users-mid-traffic", "migrate-users --apply renames the stored unscoped users while requests are served",
+			Features{Budgets: true, IdPs: true}, FaultAt{Kind: "migrate-users", At: s(6)}),
+		pgOne("combined-bmc-reset-and-month-close", "the BMC counter restarts and a month is closed in the same minute",
+			Features{Fluids: true, BMC: true, Budgets: true}, FaultAt{Kind: "bmc-counter-reset", At: s(4), Arg: 0}, FaultAt{Kind: "month-close", At: s(7)}),
+		with(Scenario{Name: "combined-saturation-5xx-and-owner-ramp", Doc: "the borrower saturates the pool, the upstream answers 502 to every third request, and the owners ramp up",
+			F: Features{Fluids: true, Federation: true, IdPs: true, BMC: true}, Duration: s(26), UpstreamLatency: 150 * time.Millisecond, PrioritySlots: PoolCapacity,
+			Load: map[string]OrgLoad{
+				"tiers": {Workers: 16, Think: 20 * time.Millisecond, StreamPct: 30, Tokens: []int{32}, Words: []int{30}},
+				"etabA": {Workers: 10, Start: s(6), Think: 20 * time.Millisecond, StreamPct: 30, Tokens: []int{32}, Words: []int{8}},
+				"etabB": {Workers: 10, Start: s(6), Think: 20 * time.Millisecond, StreamPct: 30, Tokens: []int{32}, Words: []int{8}},
+				"etabC": {Workers: 10, Start: s(6), Think: 20 * time.Millisecond, StreamPct: 30, Tokens: []int{32}, Words: []int{8}}},
+			Faults: []FaultAt{{Kind: "upstream-5xx", At: s(8), For: s(10), Arg: 502, Arg2: 3}},
+			Expect: []string{"owners-first"}}),
+		with(Scenario{Name: "combined-jwks-outage-and-retry-storm", Doc: "both IdPs' key sets vanish while clients retry every refusal at once", F: full(), Duration: s(16),
+			Load: map[string]OrgLoad{
+				"etabA": {Workers: 5, StreamPct: 30, RetryMax: 5, Tokens: []int{16, 32}, Words: []int{8}},
+				"etabB": {Workers: 5, StreamPct: 30, RetryMax: 5, Tokens: []int{16, 32}, Words: []int{20}},
+				"etabC": {Workers: 2, StreamPct: 30, RetryMax: 5, Tokens: []int{16}, Words: []int{40}},
+				"tiers": {Workers: 5, StreamPct: 30, RetryMax: 5, Tokens: []int{16}, Words: []int{30}}},
+			Faults: []FaultAt{{Kind: "idp-down", Target: "idpA", At: s(3), For: s(7)}, {Kind: "idp-down", Target: "idpB", At: s(3), For: s(7)},
+				{Kind: "idp-down", Target: "fed", At: s(3), For: s(7)}}}),
 	}
 	return cat
+}
+
+// pgOne is a single-gateway scenario on PostgreSQL (CI): operations that need a
+// database (closing a month, migrate-users).
+func pgOne(name, doc string, f Features, faults ...FaultAt) *Scenario {
+	return with(Scenario{Name: name, Doc: doc, Needs: []string{"pg"}, F: f, Duration: s(16), Load: steady(), Faults: faults})
 }
 
 // haBase is a two-replica scenario on PostgreSQL: CI only.

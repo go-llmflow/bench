@@ -68,6 +68,7 @@ type World struct {
 	PGProxy *Proxy
 	HAProxy []*Proxy
 	spans   []faultSpan
+	closed  *closedMonth
 	// oldToken is a token signed before a hard rotation, per IdP, kept to be
 	// presented afterwards.
 	oldToken map[string]string
@@ -108,6 +109,9 @@ func Setup(ctx context.Context, opt Options, sc *Scenario) (*World, error) {
 
 	w.Up = NewUpstream(24)
 	w.closers = append(w.closers, w.Up.Close)
+	if sc.PrioritySlots > 0 {
+		w.Up.SetSlots(sc.PrioritySlots)
+	}
 	if sc.UpstreamLatency > 0 {
 		w.Up.Update(func(f *UpstreamFaults) { f.Latency = sc.UpstreamLatency })
 	}

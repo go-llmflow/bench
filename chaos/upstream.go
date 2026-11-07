@@ -72,6 +72,7 @@ type Upstream struct {
 	wait   atomic.Int64
 	models atomic.Int64 // GET /v1/models answered
 	gets   atomic.Int64 // GET /v1/models received
+	sch    *sched
 }
 
 var markerRE = regexp.MustCompile(`MK([A-Za-z0-9]+)-([A-Za-z0-9]+)-([0-9]+)`)
@@ -84,6 +85,19 @@ func NewUpstream(generate int) *Upstream {
 	u.srv = httptest.NewServer(http.HandlerFunc(u.serve))
 	return u
 }
+
+// waitingNow is the queue vLLM would report: the scheduler's, plus a burst.
+func (u *Upstream) waitingNow() int64 {
+	n := u.wait.Load()
+	if u.sch != nil {
+		n += int64(u.sch.waiting())
+	}
+	return n
+}
+
+// SetSlots makes the fake schedule like vLLM: n running requests at most, the
+// rest queued by (priority, arrival) from the X-Vllm-Priority header.
+func (u *Upstream) SetSlots(n int) { u.sch = newSched(n) }
 
 // URL of the fake.
 func (u *Upstream) URL() string { return u.srv.URL }
@@ -136,7 +150,7 @@ func (u *Upstream) note(s *Seen, fn func(*Seen)) {
 func (u *Upstream) serve(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/metrics":
-		fmt.Fprintf(w, "# TYPE vllm:num_preemptions_total counter\nvllm:num_preemptions_total{engine=\"0\",model_name=\"fake\"} %d.0\n# TYPE vllm:num_requests_waiting gauge\nvllm:num_requests_waiting{engine=\"0\",model_name=\"fake\"} %d.0\n", u.pre.Load(), u.wait.Load())
+		fmt.Fprintf(w, "# TYPE vllm:num_preemptions_total counter\nvllm:num_preemptions_total{engine=\"0\",model_name=\"fake\"} %d.0\n# TYPE vllm:num_requests_waiting gauge\nvllm:num_requests_waiting{engine=\"0\",model_name=\"fake\"} %d.0\n", u.pre.Load(), u.waitingNow())
 		return
 	case r.Method == http.MethodGet && r.URL.Path == "/v1/models":
 		u.gets.Add(1)
@@ -199,6 +213,18 @@ func (u *Upstream) serve(w http.ResponseWriter, r *http.Request) {
 	u.seen[key] = s
 	u.order = append(u.order, key)
 	u.mu.Unlock()
+	if u.sch != nil {
+		prio := 0
+		if v, err := strconv.Atoi(r.Header.Get("X-Vllm-Priority")); err == nil {
+			prio = v
+			u.note(s, func(s *Seen) { s.Priority = v })
+		}
+		if !u.sch.acquire(r.Context(), prio) {
+			u.note(s, func(s *Seen) { s.ClientGone = true })
+			return
+		}
+		defer u.sch.release()
+	}
 	if f.Latency > 0 { // a model that takes time: slots stay busy
 		select {
 		case <-time.After(f.Latency):

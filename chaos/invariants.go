@@ -428,7 +428,9 @@ func inv3(w *World, j *join) Verdict {
 		}
 	}
 	detail := fmt.Sprintf("borrower upstream hits %d, max concurrency %d/%d, %s", tiersHits, w.Up.MaxInFlight(), PoolCapacity, prio)
-	if w.expects("owner-shares") {
+	if w.expects("owner-shares") && w.Sc.PrioritySlots == 0 {
+		detail += "; owner shares NOT judged: this scenario's upstream has no priority queue"
+	} else if w.expects("owner-shares") {
 		got := map[string]float64{}
 		var tot float64
 		for _, r := range j.Reqs {
@@ -599,8 +601,9 @@ func reportFraction() float64 {
 	return f
 }
 
-// fakeHonoursPriority is false: chaos.Upstream serves every request at once.
-const fakeHonoursPriority = false
+// fakeHonoursPriority: scenarios with PrioritySlots run the fake with vLLM's
+// priority queue (sched.go), so shares are judged there.
+const fakeHonoursPriority = true
 
 // Unallocated is the organisation a fluids report names for energy nobody can be charged for.
 const Unallocated = "(unallocated)"
@@ -608,10 +611,7 @@ const Unallocated = "(unallocated)"
 // ---- invariant 5 ----
 
 func inv5(w *World, j *join) Verdict {
-	if !w.Sc.needs("pg") {
-		return verdict(5, NA, "closing a month needs PostgreSQL and a month that has ended; a past month cannot be produced without clock control (gateway tests do it with WithClock)")
-	}
-	return verdict(5, NA, "no scenario closes a month yet: not exercised")
+	return inv5Closed(w)
 }
 
 // ---- invariant 6: refusals ----
