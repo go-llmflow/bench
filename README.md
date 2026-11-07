@@ -90,7 +90,10 @@ against gateway v0.37.1 and v0.38.0, as six shards per release (each with its
 own PostgreSQL). Each shard writes its table, its `--results` JSON and its
 evidence; `llmchaos merge` merges the shards and fails on a FAIL, a run that
 broke, was skipped or sent nothing, an N/A a scenario is not entitled to, and
-any scenario x seed that no shard ran.
+any scenario x seed that no shard ran. A scenario with `ControlSince` is a
+positive control: with `--tag vX.Y.Z` it must FAIL on older releases and PASS
+from that release on (`idp-schac-spoof`: gateway v0.38.0's name-scope fix);
+`llmchaos diff` between two releases must list exactly the controls.
 
 **The machine.** The campaign waits for a 1-minute load average of at most
 `--max-load` (default 8), and a run is not a measurement of time. The

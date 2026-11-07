@@ -84,6 +84,7 @@ func mergeCmd() *cobra.Command {
 		seeds      []int
 		table      string
 		resultsOut string
+		tag        string
 	)
 	cmd := &cobra.Command{
 		Use:   "merge results.json...",
@@ -129,7 +130,7 @@ catalogue that no shard ran.`,
 			}
 			out := cmd.OutOrStdout()
 			fmt.Fprint(out, tb)
-			problems := chaos.Audit(all, seeds)
+			problems := chaos.AuditTag(all, seeds, tag)
 			for _, p := range problems {
 				fmt.Fprintln(out, "PROBLEM", p)
 			}
@@ -141,6 +142,7 @@ catalogue that no shard ran.`,
 		},
 	}
 	cmd.Flags().IntSliceVar(&seeds, "seed", []int{1}, "the seeds the campaign had to cover")
+	cmd.Flags().StringVar(&tag, "tag", "", "the gateway release the shards ran against (vX.Y.Z)")
 	cmd.Flags().StringVar(&table, "table", "", "write the merged table (markdown) to this file")
 	cmd.Flags().StringVar(&resultsOut, "results", "", "write the merged results as JSON to this file (input of: llmchaos diff)")
 	return cmd
@@ -188,7 +190,7 @@ func runCmd() *cobra.Command {
 		gateway, workdir, pgFile string
 		seeds                    []int
 		all, asJSON, dry, strict bool
-		table, resultsFile       string
+		table, resultsFile, tag  string
 		maxLoad                  float64
 		loadWait                 time.Duration
 	)
@@ -264,7 +266,11 @@ environment) and are skipped, and said so, without it.`,
 					}
 					// --strict: a scenario that was skipped (no PostgreSQL) judged
 					// nothing, which in CI is a failure.
-					if res.Failed() || strict && !dry && res.Skipped != "" {
+					bad := res.Failed()
+					if chaos.ExpectedToFail(sc, tag) && res.Err == "" && res.Requests > 0 {
+						bad = !res.HasFail() // a control that passes on the old release proves nothing
+					}
+					if bad || strict && !dry && res.Skipped != "" {
 						failed++
 					}
 					if ctx.Err() != nil {
@@ -308,6 +314,7 @@ environment) and are skipped, and said so, without it.`,
 	f.BoolVar(&asJSON, "json", false, "print the results as JSON")
 	f.BoolVar(&strict, "strict", false, "a skipped scenario (no PostgreSQL) is a failure: for CI")
 	f.StringVar(&table, "table", "", "write the scenario x seed x invariant table (markdown) to this file")
+	f.StringVar(&tag, "tag", "", "the gateway release under test (vX.Y.Z): positive-control scenarios must FAIL on releases older than their ControlSince")
 	f.StringVar(&resultsFile, "results", "", "write the results as JSON to this file (input of: llmchaos merge)")
 	f.BoolVar(&dry, "check-config", false, "only generate every scenario's configuration and run the gateway's check-config on it; start nothing")
 	f.Float64Var(&maxLoad, "max-load", 8, "defer while the 1-minute load average is above this (0: no gate)")

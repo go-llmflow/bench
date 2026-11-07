@@ -60,6 +60,8 @@ func Catalogue() []*Scenario {
 			Faults: []FaultAt{{Kind: "idp-down", Target: "idpA", At: s(3), For: s(5)}, {Kind: "idp-down", Target: "fed", At: s(4), For: s(5)}}}),
 		with(Scenario{Name: "idp-jwks-rotated", Doc: "an IdP rotates its signing key mid-run, the old one leaves the key set", F: full(), Duration: s(14), Load: steady(),
 			Faults: []FaultAt{{Kind: "idp-rotate", Target: "idpA", At: s(1), Arg: 1}, {Kind: "idp-rotate", Target: "fed", At: s(2), Arg: 0}}}),
+		with(Scenario{Name: "idp-schac-spoof", Doc: "POSITIVE CONTROL (v0.38.0 fix): a federation token whose name is scoped to another institution but states the accepted schac value must be refused", F: full(), Duration: s(10), Load: steady(),
+			Expect: []string{"schac-spoof"}, ControlSince: "v0.38.0"}),
 		with(Scenario{Name: "idp-clock-skew", Doc: "IdP clocks off by minutes against a 5 m allowance: 4 min ahead (accepted), 7 min behind and 400 s ahead (refused with 401)", F: full(), Duration: s(14), Load: steady(),
 			Faults: []FaultAt{{Kind: "idp-skew", Target: "idpA", At: s(2), For: s(10), Arg: 240}, {Kind: "idp-skew", Target: "idpB", At: s(2), For: s(10), Arg: -420},
 				{Kind: "idp-skew", Target: "fed", At: s(2), For: s(10), Arg: 400}}}),

@@ -325,6 +325,33 @@ func TestInvariant2AllowsTheCountOfAnAbandonedRequestButNeverItsMoney(t *testing
 	}
 }
 
+// The allowance is proven per request: only a request the client abandoned
+// (Left) AND that the fake upstream never received (no witness for its marker)
+// may be counted. Planted: not abandoned, or received by the upstream.
+func TestInvariant2AllowanceNeedsAbandonedAndNeverReceived(t *testing.T) {
+	cost := Cost(6, 10)
+	row := []SpendRow{{Org: "etabA", Team: "a1", Key: "kA", Requests: 2, Cost: cost}}
+	// not abandoned, never reached the upstream (a 502 from the gateway, say): the extra count is a FAIL.
+	a := adminFake(t, row, nil)
+	cleanReq(a, "key:kA", "etabA", 1, 6, 10)
+	a.Ledger.Add(Outcome{Req: Req{ID: 2, Org: "etabA", Who: "key:kA", Marker: "MKetabA-s1-2", MaxTokens: 32}, Status: 200, BodyLen: 5})
+	if v := inv2(a, newJoin(a)); v.Status != Fail {
+		t.Fatalf("an unexplained extra count passed: %+v", v)
+	}
+	// abandoned but the upstream did receive it: it is disturbed (full worst-case cost bound), and
+	// a count of 2 with cost of one clean request still holds; a count of 3 does not.
+	b := adminFake(t, []SpendRow{{Org: "etabA", Team: "a1", Key: "kA", Requests: 3, Cost: cost}}, nil)
+	cleanReq(b, "key:kA", "etabA", 1, 6, 10)
+	b.Up.mu.Lock()
+	b.Up.seen["MKetabA-s1-2#1"] = &Seen{Marker: "MKetabA-s1-2", Org: "etabA", Cut: true}
+	b.Up.order = append(b.Up.order, "MKetabA-s1-2#1")
+	b.Up.mu.Unlock()
+	b.Ledger.Add(Outcome{Req: Req{ID: 2, Org: "etabA", Who: "key:kA", Marker: "MKetabA-s1-2", MaxTokens: 32}, Err: "context canceled", Left: true})
+	if v := inv2(b, newJoin(b)); v.Status != Fail {
+		t.Fatalf("a count beyond clean + received passed: %+v", v)
+	}
+}
+
 func TestInvariant1FlagsAnExceededHardBudget(t *testing.T) {
 	w := adminFake(t, nil, []BudgetRow{{Kind: "key", Name: "kA", MaxCost: 0.2, Limit: 0.2, Committed: 0.15}})
 	w.Budgets = []BudgetSpec{{Kind: "key", Name: "kA", Period: "day", Hard: 0.2}}

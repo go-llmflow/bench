@@ -120,3 +120,29 @@ func TestAuditCatchesEveryPlantedProblem(t *testing.T) {
 		}
 	}
 }
+
+func TestAPositiveControlMustFailOnTheOldReleaseAndPassOnTheNew(t *testing.T) {
+	sc := Find("idp-schac-spoof")
+	if !ExpectedToFail(sc, "v0.37.1") || ExpectedToFail(sc, "v0.38.0") || ExpectedToFail(sc, "v0.40.2") || ExpectedToFail(sc, "junk") || ExpectedToFail(Find("baseline"), "v0.1.0") {
+		t.Fatal("ExpectedToFail: only older releases, only controls")
+	}
+	seeds := []int{1}
+	mk := func(failInvariant6 bool) []Result {
+		rs := cleanCampaign(seeds)
+		for i := range rs {
+			if rs[i].Scenario == "idp-schac-spoof" && failInvariant6 {
+				rs[i].Verdicts[5].Status = Fail
+			}
+		}
+		return rs
+	}
+	if p := AuditTag(mk(true), seeds, "v0.37.1"); len(p) != 0 {
+		t.Fatalf("a control failing on the old release is expected: %v", p)
+	}
+	if p := strings.Join(AuditTag(mk(false), seeds, "v0.37.1"), "\n"); !strings.Contains(p, "positive control did not fail on v0.37.1") {
+		t.Fatalf("a control that passes on the old release proves nothing: %q", p)
+	}
+	if p := strings.Join(AuditTag(mk(true), seeds, "v0.38.0"), "\n"); !strings.Contains(p, "idp-schac-spoof/1: invariant 6 FAIL") {
+		t.Fatalf("the control failing on the new release is a failure: %q", p)
+	}
+}
