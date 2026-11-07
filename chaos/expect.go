@@ -65,6 +65,31 @@ func (w *World) authProblems(j *join) (problems []string, notes []string) {
 			} else if n > 0 {
 				notes = append(notes, fmt.Sprintf("%s %+.0fs: %d/%d %s", sp.Target, sp.Arg, n, n, word))
 			}
+		case "idp-rotate":
+			// after min_refresh (5 s) the gateway has refetched the key set: a
+			// token signed with the new key must verify. Before it, a token of
+			// an unknown kid is refused: the bounded refetch.
+			var n, bad, early int
+			for _, r := range j.Reqs {
+				if r.IdP != sp.Target || r.Left || r.Status == 0 || r.At.Before(sp.From) {
+					continue
+				}
+				if r.At.Before(sp.From.Add(9 * time.Second)) {
+					if r.Status == 401 {
+						early++
+					}
+					continue
+				}
+				n++
+				if r.Status == 401 {
+					bad++
+				}
+			}
+			if bad > 0 {
+				problems = append(problems, fmt.Sprintf("%s rotated its key: %d of %d tokens signed with the new key were still refused 9 s later (min_refresh 5 s)", sp.Target, bad, n))
+			} else if n > 0 {
+				notes = append(notes, fmt.Sprintf("%s rotated: %d tokens refused (401) while the key set was stale, then %d/%d accepted", sp.Target, early, n, n))
+			}
 		case "idp-down":
 			// the key set is cached: a fresh token signed with a known key
 			// verifies with no network, so the IdP's outage must not refuse it.

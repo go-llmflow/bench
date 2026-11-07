@@ -261,7 +261,7 @@ func (g *Gateway) config() string {
 		if len(i.Accept) > 0 {
 			p("  accept {\n    claim = \"schac_home_organization\"\n    values = [%s]\n  }\n", quoteList(i.Accept))
 		}
-		p("  clock_skew = \"5m\"\n  map {\n    claim = \"groups\"\n    value = \"users\"\n    team = %q\n  }\n}\n", i.Team)
+		p("  clock_skew = \"5m\"\n  min_refresh = \"5s\"\n  map {\n    claim = \"groups\"\n    value = \"users\"\n    team = %q\n  }\n}\n", i.Team)
 	}
 	if t.Federation {
 		p("federation \"ilaas\" {\n  prefix = %q\n  org = %q\n  metrics_networks = [\"127.0.0.0/8\"]\n}\n", FedPrefix, Borrower)
