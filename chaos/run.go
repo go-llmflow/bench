@@ -137,7 +137,7 @@ func Run(ctx context.Context, opt Options, sc *Scenario) (res Result) {
 			if undo == nil {
 				return
 			}
-			rev.add(undo)
+			undo = rev.add(undo)
 			if f.For > 0 {
 				select {
 				case <-time.After(f.For):
@@ -221,10 +221,19 @@ type reverts struct {
 }
 
 func newReverts() *reverts { return &reverts{} }
-func (r *reverts) add(f func()) {
+
+// add registers f to be undone at the end of the load and returns it wrapped
+// so that it runs once, however many times it is called: a fault with a
+// duration lifts itself, and all() must not lift it again (a second Start of a
+// replica left the first process running, untracked, for the rest of the
+// campaign: found in CI as +2 goroutines and +2 descriptors per restart).
+func (r *reverts) add(f func()) func() {
+	var once sync.Once
+	g := func() { once.Do(f) }
 	r.mu.Lock()
-	r.f = append(r.f, f)
+	r.f = append(r.f, g)
 	r.mu.Unlock()
+	return g
 }
 func (r *reverts) all() {
 	r.mu.Lock()

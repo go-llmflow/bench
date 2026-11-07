@@ -58,6 +58,14 @@ func TestRestartingAGatewayLeaksNothing(t *testing.T) {
 			_ = g.Stop()
 		}
 	}
+	// a second Start of a running gateway is refused, never a second process
+	if err := g.Start(20 * time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.Start(time.Second); err == nil {
+		t.Fatal("a running gateway was started twice")
+	}
+	_ = g.Kill()
 	g1, f1 := settle()
 	if g1 > g0 || f1 > f0 {
 		t.Fatalf("three restarts: goroutines %d -> %d, descriptors %d -> %d", g0, g1, f0, f1)

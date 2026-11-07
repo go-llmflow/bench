@@ -288,6 +288,14 @@ func (g *Gateway) CheckConfig() (string, error) {
 func (g *Gateway) Start(wait time.Duration) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if g.cmd != nil && g.done != nil {
+		select {
+		case <-g.done:
+		default:
+			// a second process would leave the first one untracked and running
+			return fmt.Errorf("gateway already running (pid %d)", g.cmd.Process.Pid)
+		}
+	}
 	cmd := exec.Command(g.Bin, "serve", "--config", g.ConfigPath())
 	g.log = &lockedBuf{}
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, g.log, g.log

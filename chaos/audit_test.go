@@ -30,6 +30,26 @@ func TestSetupRetriesOnlyAPortRace(t *testing.T) {
 	}
 }
 
+// A fault with a duration lifts itself; the end of the load must not lift it a
+// second time (a replica started twice leaked the first process).
+func TestALiftedFaultIsNotLiftedAgainAtTheEnd(t *testing.T) {
+	r := newReverts()
+	n := 0
+	undo := r.add(func() { n++ })
+	undo() // the fault lifts itself
+	r.all()
+	undo()
+	if n != 1 {
+		t.Fatalf("the revert ran %d times, want once", n)
+	}
+	m := 0
+	r.add(func() { m++ }) // a fault with no duration: lifted by all()
+	r.all()
+	if m != 1 {
+		t.Fatalf("an open-ended fault was lifted %d times by all(), want once", m)
+	}
+}
+
 func fullVerdicts(sc *Scenario) []Verdict {
 	var vs []Verdict
 	for n := 1; n < len(InvariantNames); n++ {
