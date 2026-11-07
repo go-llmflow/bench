@@ -1,0 +1,115 @@
+name: chaos
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  chaos:
+    # The chaos campaign against gateway releases, all 31 scenarios x seeds 1-5,
+    # sharded by scenario group so that no job runs long. Every shard has its own
+    # PostgreSQL (the pg and HA scenarios need one). A shard FAILS when an
+    # invariant breaks, when a scenario sent nothing, and (--strict) when one was
+    # skipped; it uploads its table, its JSON results and its evidence. The
+    # `chaos merge` job then merges the shards and fails on any FAIL, any N/A a
+    # scenario is not entitled to, and any scenario x seed no shard ran.
+    name: chaos ${{ matrix.group }} gateway ${{ matrix.tag }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        tag: [v0.37.1, v0.38.0]
+        group: [upstream, load, idp-bmc, shares-combined, ha, pg-ops]
+        include:
+          - { group: upstream, scenarios: 'baseline upstream-5xx upstream-5xx-all upstream-hang upstream-slow-tokens upstream-cut-sse upstream-wrong-usage' }
+          - { group: load, scenarios: 'models-down-at-start preemption-burst client-disconnects retry-storm-n-best-of budget-edge-burst' }
+          - { group: idp-bmc, scenarios: 'idp-jwks-down idp-jwks-rotated idp-clock-skew bmc-offline bmc-counter-reset bmc-power-only' }
+          - { group: shares-combined, scenarios: 'ilaas-saturates-while-owners-ramp combined-upstream-and-clients combined-saturation-5xx-and-owner-ramp combined-jwks-outage-and-retry-storm' }
+          - { group: ha, scenarios: 'ha-replica-kill ha-partition ha-config-reload ha-kill-during-pg-restart' }
+          - { group: pg-ops, scenarios: 'pg-restart pg-slow-queries month-close-during-traffic migrate-users-mid-traffic combined-bmc-reset-and-month-close' }
+    env:
+      GATEWAY_TAG: ${{ matrix.tag }}
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: chaos-throwaway-ci # a service container that exists for this job only
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          check-latest: true
+      - name: the gateway under test
+        run: GOBIN="$GITHUB_WORKSPACE/.chaos-bin" go install "github.com/go-llmflow/gateway/cmd/llmflow-gateway@${GATEWAY_TAG}"
+      - name: the throwaway database's DSN, in a file
+        run: printf 'postgres://postgres:chaos-throwaway-ci@127.0.0.1:5432/postgres?sslmode=disable\n' > "$GITHUB_WORKSPACE/pg.dsn"
+      - name: campaign
+        run: >-
+          go run ./cmd/llmchaos run ${{ matrix.scenarios }} --strict --seed 1 --seed 2 --seed 3 --seed 4 --seed 5 --max-load 0
+          --gateway "$GITHUB_WORKSPACE/.chaos-bin/llmflow-gateway"
+          --workdir "$GITHUB_WORKSPACE/chaos-runs"
+          --pg-dsn-file "$GITHUB_WORKSPACE/pg.dsn"
+          --results "$GITHUB_WORKSPACE/chaos-results-${{ matrix.group }}.json"
+          --table "$GITHUB_WORKSPACE/chaos-table-${{ matrix.group }}.md" > "$GITHUB_WORKSPACE/chaos-verdicts-${{ matrix.group }}.txt" 2>&1
+      - name: verdicts
+        if: always()
+        run: cat "$GITHUB_WORKSPACE/chaos-table-${{ matrix.group }}.md" "$GITHUB_WORKSPACE/chaos-verdicts-${{ matrix.group }}.txt" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: chaos-shard-${{ matrix.tag }}-${{ matrix.group }}
+          path: |
+            chaos-verdicts-${{ matrix.group }}.txt
+            chaos-table-${{ matrix.group }}.md
+            chaos-results-${{ matrix.group }}.json
+            chaos-runs/*/evidence-seed*
+          retention-days: 30
+
+  chaos-merge:
+    name: chaos merge gateway ${{ matrix.tag }}
+    needs: chaos
+    if: always()
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        tag: [v0.37.1, v0.38.0]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          check-latest: true
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: chaos-shard-${{ matrix.tag }}-*
+          path: shards
+      - name: merge
+        run: go run ./cmd/llmchaos merge --seed 1 --seed 2 --seed 3 --seed 4 --seed 5 --table chaos-table.md --results chaos-results.json shards/*/chaos-results-*.json > chaos-merge.txt 2>&1
+      - name: summary
+        if: always()
+        run: cat chaos-merge.txt >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: chaos-evidence-${{ matrix.tag }}
+          path: |
+            chaos-table.md
+            chaos-results.json
+            chaos-merge.txt
+          retention-days: 30
+

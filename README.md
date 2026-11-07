@@ -11,12 +11,92 @@ Measuring tools for LLM gateways such as
 | [`e2e/oidc`](e2e/oidc) | end-to-end checks of llmflow-gateway's OpenID Connect paths against **real** identity providers, dex and go-authn/bridge (behind a test SAML IdP): JWT access tokens, refusals, key rotation, SSO with PKCE, cross-organisation isolation, SCIM |
 | [`e2e/anthropic`](e2e/anthropic) | end-to-end checks of llmflow-gateway's opt-in Anthropic upstream: per-organisation keys, egress masking, USD accounting, retry-after; against the fake API, or the real one with a key file |
 | [`e2e/fluids`](e2e/fluids) | end-to-end check of llmflow-gateway's measured-energy accounting (gateway #97): a real gateway process scrapes a **fake NVIDIA DCGM exporter** while two organisations send chat requests, and `/admin/fluids` must return the energy the counters moved by, to the millijoule, through a driver reload and an exporter that is down; needs `BENCH_GATEWAY_BIN` (gateway v0.19.0 or later) and skips without it |
+| [`cmd/llmchaos`](cmd/llmchaos) | a **chaos campaign** against a llmflow-gateway binary: a multi-institution pool with an ILaaS borrower, two identity providers and a federation issuer, hard and soft budgets, fluids with a BMC, HA replicas; faults injected alone and combined, nine invariants judged after every scenario, replayed from a seed (see [Chaos](#chaos)) |
 | [`fakeupstream`](fakeupstream) | the fake vLLM as a Go package, for tests that embed it with `httptest`; also mimics Anthropic's API (429/529, retry-after, prompt-cache usage, workspace and rate-limit headers) |
 
 ```sh
 go install github.com/go-llmflow/bench/cmd/gwbench@latest
 go install github.com/go-llmflow/bench/cmd/fakevllm@latest
 ```
+
+## Chaos
+
+`llmchaos` attacks a **llmflow-gateway binary** from the outside: it writes the
+HCL of a multi-institution deployment, starts the gateway as a process, and
+drives it with faults while clients send traffic. After every scenario it judges
+nine invariants and prints one verdict line each (`PASS`, `FAIL`, or `N/A` with
+the reason: a pass that checked nothing is never printed).
+
+```sh
+go install github.com/go-llmflow/bench/cmd/llmchaos@latest
+llmchaos list
+llmchaos run baseline upstream-cut-sse --seed 1 --seed 2 \
+  --gateway ./llmflow-gateway --workdir ~/chaos-runs
+llmchaos run --all --gateway ./llmflow-gateway --workdir ~/chaos-runs \
+  --pg-dsn-file ./pg.dsn        # adds the PostgreSQL / HA scenarios
+```
+
+**The deployment.** Three owner organisations with shares 50/30/20 of one pool
+of 8 slots on a fake vLLM; an ILaaS third party (`tiers`, share 0,
+`borrow = "spare"`, markup, reached through a `federation` mount); two identity
+providers (one with a legacy `domain`, one with `domains`) and a federation
+issuer that accepts a list of `schac_home_organization`; hard and soft budgets
+on a key, a team, two organisations and a person; fluids with idle and
+overhead energy, fixed costs, `charge = "non_shareholders"` credits and a
+time-of-use tariff; a fake DCGM exporter and a BMC over TLS. The pieces are the
+repository's own: `fakeupstream` (recording fake vLLM) behind a fault injector,
+`fakeupstream.DCGM`, and go-redfish's `mockbmc` for the Redfish service, with
+the one resource `mockbmc` does not have, a controllable `EnvironmentMetrics`
+energy counter, served by `chaos.BMC`.
+
+**Faults** (`llmchaos list`): upstream 5xx, hang, slow tokens, an SSE stream
+cut, wrong or missing usage, `/v1/models` down at start, preemption bursts;
+clients that leave at each stream phase, retry storms, `n` / `best_of`, bursts
+at the edge of a hard budget; an IdP that is down, rotates its key or runs 4
+minutes ahead / 6 minutes behind; a BMC that is offline, resets its counter or
+reports power only; a killed replica, a partition between replicas, a rolling
+reload; PostgreSQL restart and slow queries (through a relay: no Docker needed).
+
+**Invariants**, each a Go assertion over what the clients saw, what the
+upstream witnessed and what the gateway reports:
+
+1. no hard budget is exceeded by more than the documented worst case W, in
+   every scope (key, team, org, user), by the clients' own count and by the
+   gateway's `committed` and `held`;
+2. no request is billed to another key, team or org than its caller's, none is
+   lost, none is counted twice, and a request that failed upstream is not billed;
+3. the borrower is never admitted at a concurrency above the pool, and when the
+   owners press, their share of the work is within 15 points of 50/30/20;
+4. fluids conserve energy (active + idle = measured, overhead included, to the
+   microkilowatt-hour) and the fixed-cost credits net to zero across orgs;
+5. a closed month never changes (needs PostgreSQL and a month that has ended:
+   `N/A` here, say so);
+6. every refusal has a status in 4xx/5xx and, for 429, a positive `Retry-After`
+   (for 503 one too), and no 200 is empty;
+7. the harness and the gateway process leak no goroutine or descriptor;
+8. HA: spend is neither lost nor doubled across replica restarts;
+9. the federation metrics name no other organisation, and count the refusals
+   in `+Inf` only.
+
+**Replay.** A scenario is a Go table row (`chaos.Catalogue`); the plan of every
+worker comes from `(seed, scenario, org, worker)`, so the same seed sends the
+same requests. Thread interleaving is not replayed: a failure is reproduced
+from the evidence the run leaves in `<workdir>/<scenario>/evidence-seed<N>` (the
+clients' ledger, the upstream's witness, the reports, the gateway log) and
+reduced to a deterministic test in the gateway.
+
+**CI.** `.github/workflows/chaos.yml` runs all 31 scenarios with seeds 1 to 5
+against gateway v0.37.1 and v0.38.0, as six shards per release (each with its
+own PostgreSQL). Each shard writes its table, its `--results` JSON and its
+evidence; `llmchaos merge` merges the shards and fails on a FAIL, a run that
+broke, was skipped or sent nothing, an N/A a scenario is not entitled to, and
+any scenario x seed that no shard ran.
+
+**The machine.** The campaign waits for a 1-minute load average of at most
+`--max-load` (default 8), and a run is not a measurement of time. The
+PostgreSQL scenarios read their DSN from `--pg-dsn-file` (a secret never goes on
+a command line) and are skipped, and said so, without it; CI runs them against a
+service container.
 
 ## gwbench: the protocol
 
