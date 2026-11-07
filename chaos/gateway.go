@@ -322,7 +322,9 @@ func (g *Gateway) Start(wait time.Duration) error {
 		default:
 		}
 		if time.Now().After(deadline) {
-			_ = g.Kill()
+			// not g.Kill(): Start holds g.mu, which signal takes
+			signalGroup(cmd, false)
+			<-g.done
 			return fmt.Errorf("gateway not healthy after %s: %s", wait, g.log.String())
 		}
 		time.Sleep(100 * time.Millisecond)

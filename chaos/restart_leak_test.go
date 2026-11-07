@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -14,16 +15,48 @@ import (
 // TestMain lets the test binary stand in for a gateway: `serve --config F`
 // listens on the address F holds and answers /healthz.
 func TestMain(m *testing.M) {
-	if len(os.Args) == 4 && os.Args[1] == "serve" && os.Getenv("CHAOS_FAKE_GATEWAY") == "1" {
+	if len(os.Args) == 4 && os.Args[1] == "serve" && os.Getenv("CHAOS_FAKE_GATEWAY") != "" {
+		code := 200
+		if os.Getenv("CHAOS_FAKE_GATEWAY") == "sick" {
+			code = 500
+		}
 		b, _ := os.ReadFile(os.Args[3])
 		ln, err := net.Listen("tcp", string(b))
 		if err != nil {
 			os.Exit(3)
 		}
-		_ = http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) }))
+		_ = http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(code) }))
 		os.Exit(0)
 	}
 	os.Exit(m.Run())
+}
+
+// A gateway that never turns healthy is killed and reported, not waited on
+// forever (Start holds the lock Kill takes).
+func TestAGatewayThatNeverTurnsHealthyIsKilledAndReported(t *testing.T) {
+	t.Setenv("CHAOS_FAKE_GATEWAY", "sick")
+	addr, err := FreeAddr()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "gateway.hcl"), []byte(addr), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	g := &Gateway{Bin: os.Args[0], Dir: dir, URL: "http://" + addr}
+	errc := make(chan error, 1)
+	go func() { errc <- g.Start(1500 * time.Millisecond) }()
+	select {
+	case err := <-errc:
+		if err == nil || !strings.Contains(err.Error(), "not healthy") {
+			t.Fatalf("err = %v, want not healthy", err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("Start deadlocked on its own lock")
+	}
+	if g.PID() != 0 {
+		t.Fatal("the sick gateway is still running")
+	}
 }
 
 // A gateway that is killed and started again must leave nothing behind in the
