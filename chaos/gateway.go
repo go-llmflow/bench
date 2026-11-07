@@ -300,7 +300,9 @@ func (g *Gateway) Start(wait time.Duration) error {
 	go func(c *exec.Cmd, d chan struct{}) { _ = c.Wait(); close(d) }(cmd, g.done)
 	deadline := time.Now().Add(wait)
 	for {
-		if resp, err := http.Get(g.URL + "/healthz"); err == nil {
+		// no keep-alive: an idle connection kept by the default client is a
+		// goroutine and a descriptor the leak check would count against us.
+		if resp, err := adminClient.Get(g.URL + "/healthz"); err == nil {
 			resp.Body.Close()
 			if resp.StatusCode == 200 {
 				return nil

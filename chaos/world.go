@@ -69,6 +69,9 @@ type World struct {
 	HAProxy []*Proxy
 	spans   []faultSpan
 	closed  *closedMonth
+	// killCovered counts answered requests whose bill the documented loss of a
+	// killed replica's queue may cover.
+	killCovered int
 	// oldToken is a token signed before a hard rotation, per IdP, kept to be
 	// presented afterwards.
 	oldToken map[string]string
@@ -118,7 +121,7 @@ func Setup(ctx context.Context, opt Options, sc *Scenario) (*World, error) {
 	if sc.F.ModelsDownAtStart {
 		w.Up.Update(func(f *UpstreamFaults) { f.ModelsDown = true })
 	}
-	topo := Topology{UpstreamURL: w.Up.URL(), Fluids: sc.F.Fluids, Federation: sc.F.Federation, PG: opt.PG, NoModelLen: sc.F.ModelsDownAtStart}
+	topo := Topology{UpstreamURL: w.Up.URL(), Fluids: sc.F.Fluids, Federation: sc.F.Federation, NoModelLen: sc.F.ModelsDownAtStart}
 	if sc.F.Fluids {
 		w.DCGM = fakeupstream.NewDCGM("GPU-aaa", "GPU-bbb")
 		w.dcgmSrv = httptest.NewServer(w.DCGM)

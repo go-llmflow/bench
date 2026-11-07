@@ -95,6 +95,39 @@ type join struct {
 	ByOrg map[string][]*jreq
 }
 
+// lowestBand is the vLLM priority of the last band: BorrowBase 10 + RankStep 10
+// x MaxRank 9 (gateway fairshare/fairshare.go, ha/node.go lowest()).
+const lowestBand = 100
+
+// killWindow is how long before a SIGKILL a replica's answers may not yet be
+// stored: the gateway's accounting queue is flushed about every second and "a
+// record still in the queue when the process dies (at most about 1 s of
+// traffic) is lost" (gateway README, durable accounting). Twice that, for the
+// flush interval and the request's own duration.
+const killWindow = 2 * time.Second
+
+// inKillWindow reports whether an answered request was served by a replica in
+// the last killWindow before that replica was killed: the only requests whose
+// bill the documented behaviour may lose.
+func (w *World) inKillWindow(o Outcome) bool {
+	n := len(w.GW)
+	if n < 2 {
+		return false
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	end := o.At.Add(o.Dur)
+	for _, sp := range w.spans {
+		if sp.Kind != "replica-kill" || sp.Target != fmt.Sprintf("r%d", o.ID%n) {
+			continue
+		}
+		if !end.Before(sp.From.Add(-killWindow)) && !end.After(sp.From.Add(time.Second)) {
+			return true
+		}
+	}
+	return false
+}
+
 func newJoin(w *World) *join {
 	hits := map[string][]Seen{}
 	for _, s := range w.Up.Seen() {
@@ -115,6 +148,10 @@ func newJoin(w *World) *join {
 				if full {
 					r.Fate, r.Usage = FateClean, h
 				}
+			}
+			if r.Fate == FateClean && w.inKillWindow(o) {
+				r.Fate = FateDisturbed // may be lost with the killed replica's queue
+				w.killCovered++
 			}
 			if r.Fate == FateDisturbed && o.Status >= 500 && !o.Left {
 				done := false
@@ -369,6 +406,7 @@ func inv3(w *World, j *join) Verdict {
 	var tiersHits, over int
 	var worst int
 	var ownerMaxPrio, tiersMinPrio = noPriority, 1 << 30
+	degraded := 0
 	for _, s := range w.Up.Seen() {
 		if s.Org == Borrower {
 			tiersHits++
@@ -388,8 +426,19 @@ func inv3(w *World, j *join) Verdict {
 		if r.Org == Borrower {
 			tiersMinPrio = min(tiersMinPrio, p)
 		} else if OwnerShares[r.Org] > 0 {
+			// With replicas, a node that cannot reach the pool owner admits at
+			// the lowest band (ha/node.go lowest(): documented degraded mode),
+			// the band the borrower always takes. Counted, not judged.
+			if w.Sc.Replicas > 1 && p >= lowestBand {
+				degraded++
+				continue
+			}
 			ownerMaxPrio = max(ownerMaxPrio, p)
 		}
+	}
+	degradedNote := ""
+	if degraded > 0 {
+		degradedNote = fmt.Sprintf(" [%d owner requests admitted in the lowest band by a replica that could not reach the pool owner: documented degraded mode]", degraded)
 	}
 	var problems []string
 	if over > 0 {
@@ -427,7 +476,7 @@ func inv3(w *World, j *join) Verdict {
 			prio += "; " + detail
 		}
 	}
-	detail := fmt.Sprintf("borrower upstream hits %d, max concurrency %d/%d, %s", tiersHits, w.Up.MaxInFlight(), PoolCapacity, prio)
+	detail := fmt.Sprintf("borrower upstream hits %d, max concurrency %d/%d, %s%s", tiersHits, w.Up.MaxInFlight(), PoolCapacity, prio, degradedNote)
 	if w.expects("owner-shares") && w.Sc.PrioritySlots == 0 {
 		detail += "; owner shares NOT judged: this scenario's upstream has no priority queue"
 	} else if w.expects("owner-shares") {
@@ -728,7 +777,11 @@ func inv8(w *World, j *join) Verdict {
 	if billed < lowReq || billed > hiReq || cost < lowCost-1e-6 || cost > hiCost+1e-6 {
 		return verdict(8, Fail, "billed %d requests / %.6f, answered in full %d / %.6f, at most %d / %.6f: spend lost or doubled", billed, cost, lowReq, lowCost, hiReq, hiCost)
 	}
-	return verdict(8, Pass, "billed %d requests / %.6f within [%d,%d] / [%.6f,%.6f]", billed, cost, lowReq, hiReq, lowCost, hiCost)
+	note := ""
+	if w.killCovered > 0 {
+		note = fmt.Sprintf(" (%d answers served in the last %s before a SIGKILL are allowed to be unbilled: documented loss of the accounting queue)", w.killCovered, killWindow)
+	}
+	return verdict(8, Pass, "billed %d requests / %.6f within [%d,%d] / [%.6f,%.6f]%s", billed, cost, lowReq, hiReq, lowCost, hiCost, note)
 }
 
 // ---- invariant 9: federation metrics ----
