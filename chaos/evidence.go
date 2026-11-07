@@ -13,7 +13,11 @@ import (
 // witnessed (upstream.jsonl), the gateway's reports at the end, and its logs.
 // A failing invariant is reduced to a gateway test from these.
 
-func (w *World) evDir() string { return filepath.Join(w.Opt.WorkDir, w.Sc.Name, "evidence") }
+// One directory per seed: a later seed must not overwrite the evidence of the
+// seed that failed (CI uploads them all).
+func (w *World) evDir() string {
+	return filepath.Join(w.Opt.WorkDir, w.Sc.Name, fmt.Sprintf("evidence-seed%d", w.Opt.Seed))
+}
 
 func (w *World) writeJSONL(name string, rows []any) {
 	if err := os.MkdirAll(w.evDir(), 0o700); err != nil {

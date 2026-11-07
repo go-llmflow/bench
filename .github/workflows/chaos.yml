@@ -76,7 +76,7 @@ jobs:
             chaos-verdicts-${{ matrix.group }}.txt
             chaos-table-${{ matrix.group }}.md
             chaos-results-${{ matrix.group }}.json
-            chaos-runs/*/evidence
+            chaos-runs/*/evidence-seed*
           retention-days: 30
 
   chaos-merge:

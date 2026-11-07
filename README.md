@@ -81,9 +81,16 @@ upstream witnessed and what the gateway reports:
 **Replay.** A scenario is a Go table row (`chaos.Catalogue`); the plan of every
 worker comes from `(seed, scenario, org, worker)`, so the same seed sends the
 same requests. Thread interleaving is not replayed: a failure is reproduced
-from the evidence the run leaves in `<workdir>/<scenario>/evidence` (the
+from the evidence the run leaves in `<workdir>/<scenario>/evidence-seed<N>` (the
 clients' ledger, the upstream's witness, the reports, the gateway log) and
 reduced to a deterministic test in the gateway.
+
+**CI.** `.github/workflows/chaos.yml` runs all 31 scenarios with seeds 1 to 5
+against gateway v0.37.1 and v0.38.0, as six shards per release (each with its
+own PostgreSQL). Each shard writes its table, its `--results` JSON and its
+evidence; `llmchaos merge` merges the shards and fails on a FAIL, a run that
+broke, was skipped or sent nothing, an N/A a scenario is not entitled to, and
+any scenario x seed that no shard ran.
 
 **The machine.** The campaign waits for a 1-minute load average of at most
 `--max-load` (default 8), and a run is not a measurement of time. The

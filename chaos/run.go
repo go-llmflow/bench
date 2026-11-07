@@ -6,6 +6,7 @@ import (
 	"hash/fnv"
 	"math/rand/v2"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -37,6 +38,21 @@ func (r Result) Failed() bool {
 		}
 	}
 	return false
+}
+
+// retryOnPortRace runs setup again, up to three times in all, when it failed
+// because a port picked with FreeAddr was taken between the pick and the
+// gateway's bind (CI: pg-restart seed 3 on v0.38.0). That is the harness's own
+// race, not a verdict on the gateway; any other setup error is returned as is.
+func retryOnPortRace(setup func() (*World, error)) (*World, error) {
+	var w *World
+	var err error
+	for range 3 {
+		if w, err = setup(); err == nil || !strings.Contains(err.Error(), "address already in use") {
+			return w, err
+		}
+	}
+	return w, err
 }
 
 func rngFor(seed uint64, parts ...string) *rand.Rand {
@@ -74,7 +90,7 @@ func Run(ctx context.Context, opt Options, sc *Scenario) (res Result) {
 		res.Skipped = "needs PostgreSQL (--pg-dsn-file); run in CI"
 		return res
 	}
-	w, err := Setup(ctx, opt, sc)
+	w, err := retryOnPortRace(func() (*World, error) { return Setup(ctx, opt, sc) })
 	if err != nil {
 		res.Err = "setup: " + err.Error()
 		return res

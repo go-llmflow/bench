@@ -1,9 +1,34 @@
 package chaos
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
+
+func TestSetupRetriesOnlyAPortRace(t *testing.T) {
+	calls := 0
+	_, err := retryOnPortRace(func() (*World, error) {
+		calls++
+		if calls < 3 {
+			return nil, errors.New("gateway exited at start: listen tcp 127.0.0.1:1: bind: address already in use")
+		}
+		return nil, nil
+	})
+	if err != nil || calls != 3 {
+		t.Fatalf("calls=%d err=%v: two port races then success", calls, err)
+	}
+	calls = 0
+	_, err = retryOnPortRace(func() (*World, error) { calls++; return nil, errors.New("check-config: bad") })
+	if err == nil || calls != 1 {
+		t.Fatalf("calls=%d err=%v: any other error is final, at once", calls, err)
+	}
+	calls = 0
+	_, err = retryOnPortRace(func() (*World, error) { calls++; return nil, errors.New("address already in use") })
+	if err == nil || calls != 3 {
+		t.Fatalf("calls=%d err=%v: a persistent port clash gives up after 3", calls, err)
+	}
+}
 
 func fullVerdicts(sc *Scenario) []Verdict {
 	var vs []Verdict

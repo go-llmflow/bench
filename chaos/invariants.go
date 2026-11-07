@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"math"
+	"runtime/pprof"
 	"sort"
 	"strconv"
 	"strings"
@@ -316,6 +317,15 @@ func inv2(w *World, j *join) Verdict {
 			b.hiReq++
 			b.hiCost += r.W
 			b.distCount++
+		case FateNone:
+			// A client that left before the upstream saw its request may have
+			// been counted if the gateway had admitted it a moment before (seen
+			// in CI: client-disconnects, +1 request per key in 4 of 10 runs, both
+			// gateway releases, no cost). Like a failed request: the count may
+			// include it, the money may not (the cost bounds below are unchanged).
+			if r.Left {
+				b.hiReq++
+			}
 		case FateFailed:
 			// Measured (gateway v0.37.1): a request that failed upstream is
 			// counted in `requests` with zero tokens and zero cost. The count may
@@ -940,6 +950,10 @@ func (w *World) leakVerdict() Verdict {
 	problems = append(problems, w.leakNotes...)
 	detail := fmt.Sprintf("harness goroutines %d -> %d, fds %d -> %d; %s", w.baseGoroutines, g, w.baseFDs, fd, strings.Join(w.leakParts, ", "))
 	if len(problems) > 0 {
+		// who holds the goroutines: stacks grouped with their counts
+		var prof strings.Builder
+		_ = pprof.Lookup("goroutine").WriteTo(&prof, 1)
+		w.Note("goroutine profile at the leak verdict:\n%.6000s", prof.String())
 		return verdict(7, Fail, "%s", strings.Join(problems, "; "))
 	}
 	return Verdict{N: 7, Name: InvariantNames[7], Status: Pass, Detail: detail}

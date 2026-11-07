@@ -254,9 +254,7 @@ func (w *World) provision() error {
 	if w.Sc.F.IdPs {
 		for _, d := range []struct{ idp, org, sub string }{{"idpA", "etabA", "alice"}, {"idpB", "etabB", "bob"}, {"fed", Borrower, "carol"}} {
 			c := Client{Org: d.org, Team: TeamOf[d.org], IdP: d.idp, Prefix: prefix(d.org), Who: "jwt:" + d.idp + ":" + d.sub}
-			if d.idp != "fed" {
-				c.Scoped = d.sub + "@" + map[string]string{"idpA": "a.example", "idpB": "b.example"}[d.idp]
-			}
+			c.Scoped = d.sub + "@" + map[string]string{"idpA": "a.example", "idpB": "b.example", "fed": "univ-c.example"}[d.idp]
 			w.Clients = append(w.Clients, c)
 		}
 	}
@@ -319,6 +317,10 @@ func (w *World) mintFor(idp, sub, scoped string, ttl time.Duration) (string, err
 	extra := map[string]any{}
 	if idp == "fed" {
 		extra["schac_home_organization"] = "univ-c.example"
+		// gateway v0.38.0 (breaking): the scope of the person's name must equal a
+		// value of the schac claim, so a federation proxy's token carries a
+		// scoped name. v0.37.1 accepts it too: the scope is in the accept list.
+		extra["preferred_username"] = sub + "@univ-c.example"
 	}
 	if idp == "idpB" {
 		extra["preferred_username"] = scoped // idpB asserts scoped names: bob@b.example

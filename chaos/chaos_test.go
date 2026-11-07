@@ -297,6 +297,34 @@ func TestInvariant2FlagsAChargeToTheWrongOrg(t *testing.T) {
 	}
 }
 
+func TestInvariant2AllowsTheCountOfAnAbandonedRequestButNeverItsMoney(t *testing.T) {
+	left := func(w *World) {
+		w.Ledger.Add(Outcome{Req: Req{ID: 2, Org: "etabA", Who: "key:kA", Marker: "MKetabA-s1-2", MaxTokens: 32}, Err: "context canceled", Left: true})
+	}
+	cost := Cost(6, 10)
+	// one clean request, one abandoned before the upstream saw it, counted: allowed.
+	ok := adminFake(t, []SpendRow{{Org: "etabA", Team: "a1", Key: "kA", Requests: 2, Cost: cost}}, nil)
+	cleanReq(ok, "key:kA", "etabA", 1, 6, 10)
+	left(ok)
+	if v := inv2(ok, newJoin(ok)); v.Status != Pass {
+		t.Fatalf("an abandoned request counted at no cost fails: %+v", v)
+	}
+	// planted: counted twice more than anyone could have asked.
+	more := adminFake(t, []SpendRow{{Org: "etabA", Team: "a1", Key: "kA", Requests: 3, Cost: cost}}, nil)
+	cleanReq(more, "key:kA", "etabA", 1, 6, 10)
+	left(more)
+	if v := inv2(more, newJoin(more)); v.Status != Fail {
+		t.Fatalf("a count above clean + abandoned passed: %+v", v)
+	}
+	// planted: the abandoned request billed money.
+	paid := adminFake(t, []SpendRow{{Org: "etabA", Team: "a1", Key: "kA", Requests: 2, Cost: 2 * cost}}, nil)
+	cleanReq(paid, "key:kA", "etabA", 1, 6, 10)
+	left(paid)
+	if v := inv2(paid, newJoin(paid)); v.Status != Fail {
+		t.Fatalf("money billed for an abandoned request passed: %+v", v)
+	}
+}
+
 func TestInvariant1FlagsAnExceededHardBudget(t *testing.T) {
 	w := adminFake(t, nil, []BudgetRow{{Kind: "key", Name: "kA", MaxCost: 0.2, Limit: 0.2, Committed: 0.15}})
 	w.Budgets = []BudgetSpec{{Kind: "key", Name: "kA", Period: "day", Hard: 0.2}}
