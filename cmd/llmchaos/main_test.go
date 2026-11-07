@@ -82,6 +82,32 @@ func TestMergeFailsOnAnIncompleteCampaign(t *testing.T) {
 	}
 }
 
+func TestDiffNamesTheVerdictsThatChangedBetweenTwoReleases(t *testing.T) {
+	dir := t.TempDir()
+	mk := func(name, status string) string {
+		f := dir + "/" + name
+		body := `[{"Scenario":"idp-jwks-down","Seed":1,"Requests":5,"Verdicts":[{"N":6,"Status":"` + status + `","Detail":"d"}]}]`
+		if err := os.WriteFile(f, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return f
+	}
+	out, _, err := run(t, "diff", mk("a.json", "PASS"), mk("b.json", "FAIL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "idp-jwks-down/1 invariant 6: PASS -> FAIL") || !strings.Contains(out, "1 difference(s)") {
+		t.Fatalf("diff output:\n%s", out)
+	}
+	merged := dir + "/m.json"
+	if _, _, err := run(t, "merge", "--results", merged, mk("c.json", "PASS")); err == nil {
+		t.Fatal("an incomplete campaign must fail the merge")
+	}
+	if _, err := os.Stat(merged); err != nil {
+		t.Fatalf("merge --results wrote nothing: %v", err)
+	}
+}
+
 func TestExitCodes(t *testing.T) {
 	if exitCode(failedError{2}) != 1 || exitCode(errTest{}) != 2 {
 		t.Fatal("an invariant failure exits 1, a setup error 2")

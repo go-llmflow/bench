@@ -50,6 +50,22 @@ func TestALiftedFaultIsNotLiftedAgainAtTheEnd(t *testing.T) {
 	}
 }
 
+func TestCompareListsOnlyStatusChanges(t *testing.T) {
+	mk := func(st Status, detail string) []Result {
+		return []Result{{Scenario: "s", Seed: 1, Requests: 1, Verdicts: []Verdict{{N: 1, Status: Pass, Detail: detail}, {N: 2, Status: st, Detail: detail}}}}
+	}
+	if d := Compare(mk(Pass, "x 1"), mk(Pass, "x 2")); len(d) != 0 {
+		t.Fatalf("a different detail is not a difference: %v", d)
+	}
+	d := Compare(mk(Pass, "x"), mk(Fail, "y"))
+	if len(d) != 1 || !strings.Contains(d[0], "s/1 invariant 2: PASS -> FAIL") {
+		t.Fatalf("diff = %v", d)
+	}
+	if d := Compare(mk(Pass, "x"), nil); len(d) != 1 || !strings.Contains(d[0], "only in the first") {
+		t.Fatalf("a run missing from the second campaign: %v", d)
+	}
+}
+
 func fullVerdicts(sc *Scenario) []Verdict {
 	var vs []Verdict
 	for n := 1; n < len(InvariantNames); n++ {

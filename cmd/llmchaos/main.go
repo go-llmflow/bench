@@ -49,14 +49,41 @@ func RootCmd() *cobra.Command {
 		Short:        "Chaos campaign for llmflow-gateway: faults in, invariants out",
 		SilenceUsage: true, SilenceErrors: true,
 	}
-	root.AddCommand(listCmd(), runCmd(), mergeCmd())
+	root.AddCommand(listCmd(), runCmd(), mergeCmd(), diffCmd())
 	return root
+}
+
+func diffCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "diff a.json b.json",
+		Short: "List the verdicts whose status differs between two campaigns (two gateway releases)",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			var sets [2][]chaos.Result
+			for i, a := range args {
+				b, err := os.ReadFile(a)
+				if err != nil {
+					return err
+				}
+				if err := json.Unmarshal(b, &sets[i]); err != nil {
+					return fmt.Errorf("%s: %w", a, err)
+				}
+			}
+			d := chaos.Compare(sets[0], sets[1])
+			for _, l := range d {
+				fmt.Fprintln(cmd.OutOrStdout(), l)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "%d difference(s)\n", len(d))
+			return nil
+		},
+	}
 }
 
 func mergeCmd() *cobra.Command {
 	var (
-		seeds []int
-		table string
+		seeds      []int
+		table      string
+		resultsOut string
 	)
 	cmd := &cobra.Command{
 		Use:   "merge results.json...",
@@ -85,6 +112,15 @@ catalogue that no shard ran.`,
 				}
 				return all[i].Seed < all[j].Seed
 			})
+			if resultsOut != "" {
+				b, err := json.MarshalIndent(all, "", "  ")
+				if err != nil {
+					return err
+				}
+				if err := os.WriteFile(resultsOut, b, 0o600); err != nil {
+					return err
+				}
+			}
 			tb := chaos.Table(all)
 			if table != "" {
 				if err := os.WriteFile(table, []byte(tb), 0o600); err != nil {
@@ -106,6 +142,7 @@ catalogue that no shard ran.`,
 	}
 	cmd.Flags().IntSliceVar(&seeds, "seed", []int{1}, "the seeds the campaign had to cover")
 	cmd.Flags().StringVar(&table, "table", "", "write the merged table (markdown) to this file")
+	cmd.Flags().StringVar(&resultsOut, "results", "", "write the merged results as JSON to this file (input of: llmchaos diff)")
 	return cmd
 }
 

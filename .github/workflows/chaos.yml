@@ -99,7 +99,7 @@ jobs:
           pattern: chaos-shard-${{ matrix.tag }}-*
           path: shards
       - name: merge
-        run: go run ./cmd/llmchaos merge --seed 1 --seed 2 --seed 3 --seed 4 --seed 5 --table chaos-table.md shards/*/chaos-results-*.json > chaos-merge.txt 2>&1
+        run: go run ./cmd/llmchaos merge --seed 1 --seed 2 --seed 3 --seed 4 --seed 5 --table chaos-table.md --results chaos-results.json shards/*/chaos-results-*.json > chaos-merge.txt 2>&1
       - name: summary
         if: always()
         run: cat chaos-merge.txt >> "$GITHUB_STEP_SUMMARY"
@@ -109,6 +109,7 @@ jobs:
           name: chaos-evidence-${{ matrix.tag }}
           path: |
             chaos-table.md
+            chaos-results.json
             chaos-merge.txt
           retention-days: 30
 
