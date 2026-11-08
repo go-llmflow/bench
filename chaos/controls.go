@@ -277,14 +277,14 @@ model "fake-small" {
   key_file = "@DIR@/upstream.key"
   max_output_tokens = 256
   max_model_len = %d
-  fallbacks = ["fake"]
+  fallbacks = [%q]
   fallback_on = ["unavailable", "saturated"]
   saturation_waiting = 2
   upstream "n2" {
     base_url = %q
   }
 }
-`, MaxModelLen, w.Small.URL())
+`, MaxModelLen, ModelName, w.Small.URL())
 	}
 	return nil
 }

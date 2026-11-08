@@ -357,7 +357,15 @@ func inv2(w *World, j *join) Verdict {
 		if b == nil {
 			b = &bound{}
 		}
-		if row.Requests < b.lowReq || row.Requests > b.hiReq {
+		hi := b.hiReq
+		if w.Guard != nil && o == Borrower {
+			// Measured in CI (control-spare-guard, both releases): a guard-model
+			// call is counted as a request of the guarded caller (billed requests
+			// = 3 x the answered ones: the answer and its two guard calls). The
+			// count may include them; the cost bound below is unchanged.
+			hi += int64(len(w.Guard.Calls()))
+		}
+		if row.Requests < b.lowReq || row.Requests > hi {
 			problems = append(problems, fmt.Sprintf("key %s (%s): billed %d requests, caller made %d clean + %d disturbed", row.Key, o, row.Requests, b.lowReq, b.distCount))
 		}
 		if row.Cost < b.lowCost-eps || row.Cost > b.hiCost+eps {
