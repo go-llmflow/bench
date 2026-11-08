@@ -188,7 +188,10 @@ func (w *World) spoolFairProbe() (problems, notes []string) {
 // is full, the innocent included; v0.39.0 refuses only the organisation that
 // holds most of it ("this organisation's usage records are filling the spool").
 func spoolFairProblems(outs []Outcome, from, to time.Time) (problems, notes []string) {
-	lo, hi := from.Add(3*time.Second), to.Add(-time.Second)
+	// the whole hang: the spool fills in the first seconds, and the store's own
+	// fail-closed takes over soon after (seen: the flooder's refusals for the
+	// spool run from +0.6 s to about +1.5 s into the hang)
+	lo, hi := from, to
 	var bAttempts, bSpool, aSpool int
 	for _, o := range outs {
 		if o.At.Before(lo) || o.At.After(hi) || o.Left || o.Status == 0 {
