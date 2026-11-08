@@ -263,7 +263,7 @@ environment) and are skipped, and said so, without it.`,
 					sc = &c
 				}
 				for _, seed := range seeds {
-					opt := chaos.Options{GatewayBin: gateway, WorkDir: workdir, Seed: uint64(seed), PG: pg, DryRun: dry,
+					opt := chaos.Options{Tag: tag, GatewayBin: gateway, WorkDir: workdir, Seed: uint64(seed), PG: pg, DryRun: dry,
 						Log: func(f string, a ...any) { fmt.Fprintf(cmd.ErrOrStderr(), "  "+f+"\n", a...) }}
 					res := chaos.Run(ctx, opt, sc)
 					all = append(all, res)
