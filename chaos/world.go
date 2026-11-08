@@ -76,6 +76,12 @@ type World struct {
 	// went through the federation prefix and were answered or refused: the
 	// dispatcher counts them, invariant 9 must too.
 	fedProbes float64
+	// samples of the gateway's in-flight gauges (control n-slots)
+	samples []inflightSample
+	// Guard is the counting fake guard model, Small the fallback model's upstream.
+	satAt time.Time // when the saturate fault started
+	Guard *fakeGuard
+	Small *Upstream
 	// oldToken is a token signed before a hard rotation, per IdP, kept to be
 	// presented afterwards.
 	oldToken map[string]string
@@ -126,6 +132,9 @@ func Setup(ctx context.Context, opt Options, sc *Scenario) (*World, error) {
 		w.Up.Update(func(f *UpstreamFaults) { f.ModelsDown = true })
 	}
 	topo := Topology{UpstreamURL: w.Up.URL(), Fluids: sc.F.Fluids, Federation: sc.F.Federation, NoModelLen: sc.F.ModelsDownAtStart}
+	if err := w.setupControlFakes(&topo); err != nil {
+		return fail(err)
+	}
 	if sc.F.Fluids {
 		w.DCGM = fakeupstream.NewDCGM("GPU-aaa", "GPU-bbb")
 		w.dcgmSrv = httptest.NewServer(w.DCGM)

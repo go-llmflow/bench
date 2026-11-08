@@ -37,7 +37,7 @@ func skewAccepted(s time.Duration) (accepted, decided bool) {
 
 func (w *World) authProblems(j *join) (problems []string, notes []string) {
 	defer func() {
-		p, n := w.schacSpoofProbe()
+		p, n := w.controlProbes()
 		problems, notes = append(problems, p...), append(notes, n...)
 	}()
 	w.mu.Lock()

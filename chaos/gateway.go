@@ -64,6 +64,10 @@ type Topology struct {
 	NoModelLen  bool // leave max_model_len out: learnt from /v1/models
 	// Extra HCL appended verbatim (a scenario's own settings).
 	Extra string
+	// ModelExtra is HCL inside the main model's block (fallbacks, say).
+	ModelExtra string
+	// PoolExtra is HCL inside the main pool's block (per-pool shares, say).
+	PoolExtra string
 	// PG is a PostgreSQL DSN; "" means the memory store.
 	PG string
 	// HA is set for each replica of an HA pair.
@@ -203,11 +207,12 @@ func (g *Gateway) config() string {
 		p("org %q {\n  share = %v\n  team %q {}\n}\n", o, OwnerShares[o], TeamOf[o])
 	}
 	p("org %q {\n  share = 0\n  team %q {}\n  billing {\n    markup = 0.15\n  }\n}\n", Borrower, TeamOf[Borrower])
-	p("pool \"gpu\" {\n  capacity = %d\n  borrow = \"spare\"\n}\n", PoolCapacity)
+	p("pool \"gpu\" {\n  capacity = %d\n  borrow = \"spare\"\n%s}\n", PoolCapacity, t.PoolExtra)
 	p("model %q {\n  upstream_model = \"fake\"\n  pool = \"gpu\"\n  class = \"interactive\"\n  key_file = %q\n  max_output_tokens = 256\n", ModelName, filepath.Join(g.Dir, "upstream.key"))
 	if !t.NoModelLen { // else the gateway must learn L from GET /v1/models
 		p("  max_model_len = %d\n", MaxModelLen)
 	}
+	b.WriteString(t.ModelExtra)
 	p("  cost {\n    input_per_mtok = %v\n    output_per_mtok = %v\n    cached_per_mtok = %v\n  }\n", PriceIn, PriceOut, PriceCached)
 	p("  upstream \"n1\" {\n    base_url = %q\n", t.UpstreamURL)
 	if t.DCGMURL != "" {
@@ -266,7 +271,7 @@ func (g *Gateway) config() string {
 	if t.Federation {
 		p("federation \"ilaas\" {\n  prefix = %q\n  org = %q\n  metrics_networks = [\"127.0.0.0/8\"]\n}\n", FedPrefix, Borrower)
 	}
-	b.WriteString(t.Extra)
+	b.WriteString(strings.ReplaceAll(t.Extra, "@DIR@", g.Dir))
 	return b.String()
 }
 
@@ -379,12 +384,17 @@ func (g *Gateway) Log() string { return g.log.String() }
 
 // Admin is a call to the admin API with the master key.
 func (g *Gateway) Admin(method, path, body string) (int, []byte, error) {
+	return g.AdminAs(g.Master, method, path, body)
+}
+
+// AdminAs is a call to the admin API with the given bearer (a user's admin token).
+func (g *Gateway) AdminAs(bearer, method, path, body string) (int, []byte, error) {
 	req, err := http.NewRequest(method, g.URL+path, strings.NewReader(body))
 	if err != nil {
 		return 0, nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+g.Master)
+	req.Header.Set("Authorization", "Bearer "+bearer)
 	resp, err := adminClient.Do(req)
 	if err != nil {
 		return 0, nil, err

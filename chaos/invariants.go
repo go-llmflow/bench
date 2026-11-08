@@ -111,10 +111,7 @@ const killWindow = 2 * time.Second
 // the last killWindow before that replica was killed: the only requests whose
 // bill the documented behaviour may lose.
 func (w *World) inKillWindow(o Outcome) bool {
-	n := len(w.GW)
-	if n < 2 {
-		return false
-	}
+	n := max(1, len(w.GW)) // one replica too: control-recorder-stall kills the only one
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	end := o.At.Add(o.Dur)
@@ -133,6 +130,11 @@ func newJoin(w *World) *join {
 	hits := map[string][]Seen{}
 	for _, s := range w.Up.Seen() {
 		hits[s.Marker] = append(hits[s.Marker], s)
+	}
+	if w.Small != nil { // the fallback model's upstream witnesses the requests moved to it
+		for _, s := range w.Small.Seen() {
+			hits[s.Marker] = append(hits[s.Marker], s)
+		}
 	}
 	j := &join{ByOrg: map[string][]*jreq{}}
 	for _, o := range w.Ledger.All() {
@@ -357,7 +359,15 @@ func inv2(w *World, j *join) Verdict {
 		if b == nil {
 			b = &bound{}
 		}
-		if row.Requests < b.lowReq || row.Requests > b.hiReq {
+		hi := b.hiReq
+		if w.Guard != nil && o == Borrower {
+			// Measured in CI (control-spare-guard, both releases): a guard-model
+			// call is counted as a request of the guarded caller (billed requests
+			// = 3 x the answered ones: the answer and its two guard calls). The
+			// count may include them; the cost bound below is unchanged.
+			hi += int64(len(w.Guard.Calls()))
+		}
+		if row.Requests < b.lowReq || row.Requests > hi {
 			problems = append(problems, fmt.Sprintf("key %s (%s): billed %d requests, caller made %d clean + %d disturbed", row.Key, o, row.Requests, b.lowReq, b.distCount))
 		}
 		if row.Cost < b.lowCost-eps || row.Cost > b.hiCost+eps {
