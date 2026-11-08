@@ -158,6 +158,10 @@ func Run(ctx context.Context, opt Options, sc *Scenario) (res Result) {
 			}
 		}(i, f)
 	}
+	if sc.expects("n-slots") {
+		wg.Add(1)
+		go func() { defer wg.Done(); w.sampleInflight(runCtx, loadEnd) }()
+	}
 	// the load
 	hc := NewClient()
 	var seq int
@@ -265,6 +269,9 @@ func (w *World) newReq(r *rand.Rand, ld OrgLoad, c Client, id int) Req {
 	req.Words = pick(r, ld.Words, 8)
 	if r.IntN(100) < ld.NPct {
 		req.N, req.BestOf = 2, 2
+		if ld.N > 0 {
+			req.N, req.BestOf = ld.N, ld.N
+		}
 	}
 	if req.Stream && r.IntN(100) < ld.LeavePct {
 		req.Leave = Phases[r.IntN(len(Phases))]

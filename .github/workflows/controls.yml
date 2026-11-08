@@ -1,0 +1,46 @@
+name: controls
+
+# A quick check of the positive controls alone (a few minutes), on the pushes
+# of the branches that work on them; the whole campaign is chaos.yml.
+on:
+  push:
+    branches: ['chaos-controls*']
+
+permissions:
+  contents: read
+
+jobs:
+  controls:
+    name: controls gateway ${{ matrix.tag }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        tag: [v0.37.1, v0.38.0]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          check-latest: true
+      - name: the gateway under test
+        run: GOBIN="$GITHUB_WORKSPACE/.chaos-bin" go install "github.com/go-llmflow/gateway/cmd/llmflow-gateway@${{ matrix.tag }}"
+      - name: controls
+        run: >-
+          go run ./cmd/llmchaos run idp-schac-spoof control-n-slots --tag ${{ matrix.tag }} --strict --seed 1 --seed 2 --max-load 0
+          --gateway "$GITHUB_WORKSPACE/.chaos-bin/llmflow-gateway"
+          --workdir "$GITHUB_WORKSPACE/chaos-runs"
+          --table "$GITHUB_WORKSPACE/controls-table.md" > "$GITHUB_WORKSPACE/controls-verdicts.txt" 2>&1
+      - name: verdicts
+        if: always()
+        run: cat "$GITHUB_WORKSPACE/controls-table.md" "$GITHUB_WORKSPACE/controls-verdicts.txt" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: controls-${{ matrix.tag }}
+          path: |
+            controls-verdicts.txt
+            controls-table.md
+            chaos-runs/*/evidence-seed*
+          retention-days: 14

@@ -76,6 +76,8 @@ type World struct {
 	// went through the federation prefix and were answered or refused: the
 	// dispatcher counts them, invariant 9 must too.
 	fedProbes float64
+	// samples of the gateway's in-flight gauges (control n-slots)
+	samples []inflightSample
 	// oldToken is a token signed before a hard rotation, per IdP, kept to be
 	// presented afterwards.
 	oldToken map[string]string

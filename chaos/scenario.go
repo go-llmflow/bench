@@ -16,6 +16,7 @@ type OrgLoad struct {
 	Think     time.Duration
 	StreamPct int   // percent of requests that stream
 	NPct      int   // percent that ask n=2 (and best_of=2)
+	N         int   // when set, n and best_of of those requests (default 2)
 	LeavePct  int   // percent that disconnect, at a random phase
 	Tokens    []int // max_tokens to pick from
 	Words     []int // prompt sizes to pick from

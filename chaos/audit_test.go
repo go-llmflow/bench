@@ -131,7 +131,7 @@ func TestAPositiveControlMustFailOnTheOldReleaseAndPassOnTheNew(t *testing.T) {
 	mk := func(failInvariant6 bool) []Result {
 		rs := cleanCampaign(seeds)
 		for i := range rs {
-			if rs[i].Scenario == "idp-schac-spoof" && failInvariant6 {
+			if Find(rs[i].Scenario).ControlSince != "" && failInvariant6 {
 				rs[i].Verdicts[5].Status = Fail
 			}
 		}
