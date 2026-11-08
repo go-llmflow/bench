@@ -41,6 +41,11 @@ func round2() []*Scenario {
 		ha("migrate-users-ha", "migrate-users --apply renames the stored unscoped users while two replicas serve requests",
 			Features{Budgets: true, IdPs: true}, steady(), []FaultAt{{Kind: "migrate-users", At: s(8)}}, nil),
 		with(Scenario{Name: "long-mixed-traffic", Doc: "30 minutes of mixed traffic with periodic upstream, IdP and BMC faults: the gateway's memory, descriptors and spool do not grow, and the owners' shares do not drift",
+			// PostgreSQL: the memory store keeps every usage record in memory by
+			// design (about 1.3 KB each: 60 to 210 MiB over 115 000 requests in the
+			// first CI run, on every seed and release), which is not what a
+			// production gateway does and would read as a leak
+			Needs: []string{"pg"}, Replicas: 1,
 			F: Features{Fluids: true, Federation: true, IdPs: true, BMC: true}, Duration: 30 * time.Minute, Load: steady(),
 			Faults: []FaultAt{
 				{Kind: "upstream-5xx", At: s(300), For: s(20), Arg: 502, Arg2: 2}, {Kind: "idp-down", Target: "idpA", At: s(600), For: s(30)},

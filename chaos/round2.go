@@ -262,6 +262,11 @@ func (w *World) longRunProbe() (problems, notes []string) {
 	w.mu.Lock()
 	ss := append([]trendSample(nil), w.trends...)
 	w.mu.Unlock()
+	rows := make([]any, 0, len(ss))
+	for _, s := range ss { // the series is evidence: a trend is a shape, not a verdict
+		rows = append(rows, s)
+	}
+	w.writeJSONL("trends.jsonl", rows)
 	p, n := trendProblems(ss)
 	problems, notes = append(problems, p...), append(notes, n...)
 	p, n = driftProblems(w.Ledger.All(), w.started, w.Sc.Duration, 6)
