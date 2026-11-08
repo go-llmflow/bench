@@ -371,7 +371,13 @@ func (w *World) fallbackSpareProbe() (problems, notes []string) {
 	}
 	from := sat.Add(3 * time.Second) // the health loop scrapes every second
 	var hits, admitted int
-	for _, s := range w.Small.Seen() {
+	all := w.Small.Seen()
+	byOrg := map[string]int{}
+	for _, s := range all {
+		byOrg[s.Org]++
+	}
+	notes = append(notes, fmt.Sprintf("fallback-spare: the fallback pool's upstream received %d requests in all, by organisation %v; the main upstream %d", len(all), byOrg, len(w.Up.Seen())))
+	for _, s := range all {
 		if s.Org == Borrower && s.Started.After(from) {
 			hits++
 		}
@@ -390,4 +396,16 @@ func (w *World) fallbackSpareProbe() (problems, notes []string) {
 		notes = append(notes, fmt.Sprintf("fallback-spare: %d borrower requests served by the main pool, none moved to the saturated fallback pool", admitted))
 	}
 	return
+}
+
+func init() {
+	// the store HANGS: connections are accepted and nothing is answered (a
+	// restart refuses them, slow queries answer): gateway#165's trigger.
+	faultTable["pg-hang"] = func(w *World, f FaultAt) (func(), error) {
+		if w.PGProxy == nil {
+			return nil, fmt.Errorf("no PostgreSQL relay in this scenario")
+		}
+		w.PGProxy.Set(ProxyBlackhole, 0)
+		return func() { w.PGProxy.Set(ProxyPass, 0) }, nil
+	}
 }

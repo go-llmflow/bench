@@ -80,6 +80,13 @@ func Catalogue() []*Scenario {
 				"tiers": {Workers: 4, Think: 50 * time.Millisecond, Tokens: []int{16}, Words: []int{20}}},
 			Faults: []FaultAt{{Kind: "saturate-small", At: s(2), Arg: 5}},
 			Expect: []string{"fallback-spare"}, ControlSince: "v0.38.0"}),
+		with(Scenario{Name: "control-recorder-stall", Doc: "POSITIVE CONTROL (gateway v0.38.1, #165): the store hangs (not restarts), requests are answered meanwhile, the only replica is SIGKILLed before the 10 s insert timeout and restarted: every answered request must be billed exactly once",
+			Needs: []string{"pg"}, Replicas: 1, F: Features{}, Duration: s(11),
+			Load: map[string]OrgLoad{
+				"etabA": {Workers: 4, Think: 100 * time.Millisecond, Tokens: []int{16}, Words: []int{8}},
+				"etabB": {Workers: 3, Think: 100 * time.Millisecond, Tokens: []int{16}, Words: []int{8}}},
+			Faults:       []FaultAt{{Kind: "pg-hang", At: s(4), For: s(2.6)}, {Kind: "replica-kill", Target: "r0", At: s(5.5), For: s(1.5)}},
+			ControlSince: "v0.38.1"}),
 		with(Scenario{Name: "control-n-slots", Doc: "POSITIVE CONTROL (v0.38.0 fix): requests with n = best_of = 4 must count four choices in the fair-share estimate of tokens in flight",
 			F: Features{Federation: true}, Duration: s(8), UpstreamLatency: 800 * time.Millisecond,
 			Load:   map[string]OrgLoad{"etabA": {Workers: 4, StreamPct: 0, NPct: 100, N: 4, Tokens: []int{64}, Words: []int{8}}},

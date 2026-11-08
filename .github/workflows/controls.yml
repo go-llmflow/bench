@@ -17,7 +17,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        tag: [v0.37.1, v0.38.0]
+        tag: [v0.37.1, v0.38.0, v0.38.1]
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: chaos-throwaway-ci # a service container that exists for this job only
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v5
@@ -26,9 +37,12 @@ jobs:
           check-latest: true
       - name: the gateway under test
         run: GOBIN="$GITHUB_WORKSPACE/.chaos-bin" go install "github.com/go-llmflow/gateway/cmd/llmflow-gateway@${{ matrix.tag }}"
+      - name: the throwaway database's DSN, in a file
+        run: printf 'postgres://postgres:chaos-throwaway-ci@127.0.0.1:5432/postgres?sslmode=disable\n' > "$GITHUB_WORKSPACE/pg.dsn"
       - name: controls
         run: >-
-          go run ./cmd/llmchaos run idp-schac-spoof control-n-slots control-admin-users control-spare-guard control-fallback-spare --tag ${{ matrix.tag }} --strict --seed 1 --seed 2 --max-load 0
+          go run ./cmd/llmchaos run idp-schac-spoof control-n-slots control-admin-users control-spare-guard control-fallback-spare control-recorder-stall
+          --pg-dsn-file "$GITHUB_WORKSPACE/pg.dsn" --tag ${{ matrix.tag }} --strict --seed 1 --seed 2 --max-load 0
           --gateway "$GITHUB_WORKSPACE/.chaos-bin/llmflow-gateway"
           --workdir "$GITHUB_WORKSPACE/chaos-runs"
           --table "$GITHUB_WORKSPACE/controls-table.md" > "$GITHUB_WORKSPACE/controls-verdicts.txt" 2>&1
