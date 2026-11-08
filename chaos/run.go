@@ -90,6 +90,15 @@ func Run(ctx context.Context, opt Options, sc *Scenario) (res Result) {
 		res.Skipped = "needs PostgreSQL (--pg-dsn-file); run in CI"
 		return res
 	}
+	if d := dayBoundaryWait(time.Now(), sc.Duration+3*time.Minute); d > 0 {
+		if opt.Log != nil {
+			opt.Log("%s: a UTC midnight falls inside this run; waiting %s (the budgets are per day)", sc.Name, d.Round(time.Second))
+		}
+		select {
+		case <-time.After(d):
+		case <-ctx.Done():
+		}
+	}
 	w, err := retryOnPortRace(func() (*World, error) { return Setup(ctx, opt, sc) })
 	if err != nil {
 		res.Err = "setup: " + err.Error()
@@ -381,4 +390,19 @@ func (w *World) driveEnergy(ctx context.Context, until time.Time) {
 			w.BMC.Add(float64(75_000+90_000) * 1.12 / 3_600_000_000)
 		}
 	}
+}
+
+// dayBoundaryWait is how long to wait before starting a run that needs `need`
+// of wall clock, so that no UTC midnight falls inside it: the budgets of the
+// campaign are per day, and a period that rolls over mid-run lets the clients
+// legitimately pay more than the limit (found in CI: budget-edge-burst seed 5
+// started 90 s before midnight UTC; the gateway's own "spent" was 1.58 of 3.00
+// while the clients had paid 4.02 across the boundary).
+func dayBoundaryWait(now time.Time, need time.Duration) time.Duration {
+	u := now.UTC()
+	next := time.Date(u.Year(), u.Month(), u.Day()+1, 0, 0, 0, 0, time.UTC)
+	if next.Sub(u) > need {
+		return 0
+	}
+	return next.Sub(u) + 2*time.Second
 }

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSetupRetriesOnlyAPortRace(t *testing.T) {
@@ -144,5 +145,18 @@ func TestAPositiveControlMustFailOnTheOldReleaseAndPassOnTheNew(t *testing.T) {
 	}
 	if p := strings.Join(AuditTag(mk(true), seeds, "v0.38.0"), "\n"); !strings.Contains(p, "idp-schac-spoof/1: invariant 6 FAIL") {
 		t.Fatalf("the control failing on the new release is a failure: %q", p)
+	}
+}
+
+func TestARunIsNotStartedAcrossAUTCMidnight(t *testing.T) {
+	at := func(h, m, s int) time.Time { return time.Date(2026, 11, 7, h, m, s, 0, time.UTC) }
+	if w := dayBoundaryWait(at(12, 0, 0), 3*time.Minute); w != 0 {
+		t.Fatalf("noon: wait %v", w)
+	}
+	if w := dayBoundaryWait(at(23, 58, 30), 3*time.Minute); w != 90*time.Second+2*time.Second {
+		t.Fatalf("90 s before midnight: wait %v", w)
+	}
+	if w := dayBoundaryWait(at(23, 58, 0), 3*time.Minute); w == 0 {
+		t.Fatalf("a run that would cross midnight must wait: %v", w)
 	}
 }
