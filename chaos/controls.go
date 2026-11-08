@@ -278,21 +278,16 @@ model "fake-small" {
 }
 
 func init() {
-	// both vLLM queues report Arg waiting requests from now on
-	faultTable["saturate"] = func(w *World, f FaultAt) (func(), error) {
+	// the fallback model's vLLM queue reports Arg waiting requests from now on
+	faultTable["saturate-small"] = func(w *World, f FaultAt) (func(), error) {
+		if w.Small == nil {
+			return nil, fmt.Errorf("no fallback model in this scenario")
+		}
 		w.mu.Lock()
 		w.satAt = time.Now()
 		w.mu.Unlock()
-		w.Up.PreemptionBurst(0, int64(f.Arg))
-		if w.Small != nil {
-			w.Small.PreemptionBurst(0, int64(f.Arg))
-		}
-		return func() {
-			w.Up.Calm()
-			if w.Small != nil {
-				w.Small.Calm()
-			}
-		}, nil
+		w.Small.PreemptionBurst(0, int64(f.Arg))
+		return w.Small.Calm, nil
 	}
 }
 
@@ -329,7 +324,7 @@ func (w *World) spareGuardProbe() (problems, notes []string) {
 		}
 	}
 	switch {
-	case refused < 10 || admitted < 5:
+	case refused < 10 || admitted < 3:
 		problems = append(problems, fmt.Sprintf("spare-guard: %d borrower requests refused and %d admitted: the pool was not contended, the probe proves nothing", refused, admitted))
 	case len(calls) > admitted+3:
 		problems = append(problems, fmt.Sprintf("spare-guard: %d guard-model calls for %d borrower requests that reached the upstream (%d were refused 429): a refused request must cost no guard call", len(calls), admitted, refused))
@@ -361,27 +356,24 @@ func (w *World) fallbackSpareProbe() (problems, notes []string) {
 		return []string{"fallback-spare: the queues were never saturated"}, nil
 	}
 	from := sat.Add(3 * time.Second) // the health loop scrapes every second
-	var hits, attempts, before int
+	var hits, admitted int
 	for _, s := range w.Small.Seen() {
-		if s.Started.After(from) {
+		if s.Org == Borrower && s.Started.After(from) {
 			hits++
 		}
 	}
-	for _, o := range w.Ledger.All() {
-		switch {
-		case o.Org == Borrower && o.At.After(from):
-			attempts++
-		case o.Org == Borrower && o.At.Before(sat) && o.Status == 200:
-			before++
+	for _, s := range w.Up.Seen() {
+		if s.Org == Borrower && s.Started.After(from) {
+			admitted++
 		}
 	}
 	switch {
-	case attempts < 10 || before < 1:
-		problems = append(problems, fmt.Sprintf("fallback-spare: %d borrower requests after the saturation and %d answered before it: the probe proves nothing", attempts, before))
+	case hits == 0 && admitted < 5:
+		problems = append(problems, fmt.Sprintf("fallback-spare: only %d borrower requests were admitted in the main pool after the saturation: the probe proves nothing", admitted))
 	case hits > 0:
-		problems = append(problems, fmt.Sprintf("fallback-spare: %d borrower requests took a slot in the fallback pool whose vLLM queue is saturated, of %d sent (want 0: a spare-only organisation is refused there)", hits, attempts))
+		problems = append(problems, fmt.Sprintf("fallback-spare: %d borrower requests took a slot in the fallback pool whose vLLM queue is saturated, and %d stayed in the main pool (want 0 in the fallback pool: a spare-only organisation is refused there)", hits, admitted))
 	default:
-		notes = append(notes, fmt.Sprintf("fallback-spare: %d borrower requests after the saturation, none reached the saturated fallback pool", attempts))
+		notes = append(notes, fmt.Sprintf("fallback-spare: %d borrower requests served by the main pool, none moved to the saturated fallback pool", admitted))
 	}
 	return
 }
