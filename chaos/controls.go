@@ -256,9 +256,14 @@ guardrail "lg" {
 	if w.Sc.F.Fallback {
 		w.Small = NewUpstream(24)
 		w.closers = append(w.closers, w.Small.Close)
+		// The borrower holds a (small) share of the main pool, so it is not
+		// spare-only there and, above it, borrows and waits; in the fallback pool
+		// it holds none: spare-only.
+		topo.PoolExtra = fmt.Sprintf("  shares = { etabA = 0.4, etabB = 0.3, etabC = 0.2, %s = 0.1 }\n", Borrower)
 		topo.ModelExtra = "  fallbacks = [\"fake-small\"]\n  fallback_on = [\"unavailable\", \"saturated\"]\n  saturation_waiting = 2\n"
 		topo.Extra += fmt.Sprintf(`pool "small" {
   capacity = 2
+  shares = { etabA = 1 }
   borrow = "spare"
 }
 model "fake-small" {
@@ -326,8 +331,10 @@ func (w *World) spareGuardProbe() (problems, notes []string) {
 	switch {
 	case refused < 10 || admitted < 3:
 		problems = append(problems, fmt.Sprintf("spare-guard: %d borrower requests refused and %d admitted: the pool was not contended, the probe proves nothing", refused, admitted))
-	case len(calls) > admitted+3:
-		problems = append(problems, fmt.Sprintf("spare-guard: %d guard-model calls for %d borrower requests that reached the upstream (%d were refused 429): a refused request must cost no guard call", len(calls), admitted, refused))
+	case len(calls) > 2*admitted+3:
+		// measured on v0.38.0: exactly two guard calls per admitted request (the
+		// prompt, then the answer); on v0.37.1 one per request refused as well.
+		problems = append(problems, fmt.Sprintf("spare-guard: %d guard-model calls for %d borrower requests that reached the upstream (at most 2 each: the prompt and the answer), while %d were refused 429: a refused request must cost no guard call", len(calls), admitted, refused))
 	}
 	if zero > 0 {
 		problems = append(problems, fmt.Sprintf("spare-guard: %d guard-model calls ran at vLLM priority 0, ahead of the owners' work (want the priority of the request judged)", zero))

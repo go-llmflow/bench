@@ -66,6 +66,8 @@ type Topology struct {
 	Extra string
 	// ModelExtra is HCL inside the main model's block (fallbacks, say).
 	ModelExtra string
+	// PoolExtra is HCL inside the main pool's block (per-pool shares, say).
+	PoolExtra string
 	// PG is a PostgreSQL DSN; "" means the memory store.
 	PG string
 	// HA is set for each replica of an HA pair.
@@ -205,7 +207,7 @@ func (g *Gateway) config() string {
 		p("org %q {\n  share = %v\n  team %q {}\n}\n", o, OwnerShares[o], TeamOf[o])
 	}
 	p("org %q {\n  share = 0\n  team %q {}\n  billing {\n    markup = 0.15\n  }\n}\n", Borrower, TeamOf[Borrower])
-	p("pool \"gpu\" {\n  capacity = %d\n  borrow = \"spare\"\n}\n", PoolCapacity)
+	p("pool \"gpu\" {\n  capacity = %d\n  borrow = \"spare\"\n%s}\n", PoolCapacity, t.PoolExtra)
 	p("model %q {\n  upstream_model = \"fake\"\n  pool = \"gpu\"\n  class = \"interactive\"\n  key_file = %q\n  max_output_tokens = 256\n", ModelName, filepath.Join(g.Dir, "upstream.key"))
 	if !t.NoModelLen { // else the gateway must learn L from GET /v1/models
 		p("  max_model_len = %d\n", MaxModelLen)

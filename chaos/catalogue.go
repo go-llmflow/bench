@@ -75,8 +75,8 @@ func Catalogue() []*Scenario {
 		with(Scenario{Name: "control-fallback-spare", Doc: "POSITIVE CONTROL (v0.38.0 fix): the owners keep the main pool one slot short of full, so a borrower takes its last slot and looks for a fallback; the fallback pool's vLLM queue is saturated: a spare-only borrower must not take a slot there",
 			F: Features{Fallback: true}, Duration: s(12), UpstreamLatency: time.Second,
 			Load: map[string]OrgLoad{
-				"etabA": {Workers: 4, Tokens: []int{16}, Words: []int{8}},
-				"etabB": {Workers: 3, Tokens: []int{16}, Words: []int{8}},
+				"etabA": {Workers: 6, Tokens: []int{16}, Words: []int{8}},
+				"etabB": {Workers: 4, Tokens: []int{16}, Words: []int{8}},
 				"tiers": {Workers: 4, Think: 50 * time.Millisecond, Tokens: []int{16}, Words: []int{20}}},
 			Faults: []FaultAt{{Kind: "saturate-small", At: s(2), Arg: 5}},
 			Expect: []string{"fallback-spare"}, ControlSince: "v0.38.0"}),
