@@ -268,7 +268,6 @@ model "fake-small" {
   key_file = "@DIR@/upstream.key"
   max_output_tokens = 256
   max_model_len = %d
-  saturation_waiting = 2
   upstream "n2" {
     base_url = %q
   }
