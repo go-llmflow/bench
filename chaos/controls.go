@@ -2,9 +2,14 @@ package chaos
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -23,7 +28,7 @@ func (s *Scenario) expects(name string) bool {
 
 // controlProbes runs the probes of the scenario's controls.
 func (w *World) controlProbes() (problems, notes []string) {
-	for _, f := range []func() ([]string, []string){w.schacSpoofProbe, w.nSlotsProbe, w.adminUsersProbe} {
+	for _, f := range []func() ([]string, []string){w.schacSpoofProbe, w.nSlotsProbe, w.adminUsersProbe, w.spareGuardProbe, w.fallbackSpareProbe} {
 		p, n := f()
 		problems, notes = append(problems, p...), append(notes, n...)
 	}
@@ -167,6 +172,217 @@ func (w *World) adminUsersProbe() (problems, notes []string) {
 	}
 	if len(problems) == 0 {
 		notes = append(notes, "admin-users: bare and foreign-domain creations refused 400, own domain 201, the gateway restarted")
+	}
+	return
+}
+
+// ---- the fakes the controls need ----
+
+type guardCall struct {
+	At         time.Time
+	HeaderPrio string
+	BodyPrio   int // noPriority when absent
+}
+
+// fakeGuard is a llama-guard model that counts the calls it receives and the
+// vLLM priority each carried, and always answers "safe".
+type fakeGuard struct {
+	srv   *httptest.Server
+	mu    sync.Mutex
+	calls []guardCall
+}
+
+func newFakeGuard() *fakeGuard {
+	g := &fakeGuard{}
+	g.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/models":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"object":"list","data":[{"id":"meta-llama/Llama-Guard-3-8B","object":"model","max_model_len":8192}]}`)
+		case r.Method == http.MethodPost:
+			b, _ := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+			var req struct {
+				Priority *int `json:"priority"`
+			}
+			_ = json.Unmarshal(b, &req)
+			c := guardCall{At: time.Now(), HeaderPrio: r.Header.Get("X-Vllm-Priority"), BodyPrio: noPriority}
+			if req.Priority != nil {
+				c.BodyPrio = *req.Priority
+			}
+			g.mu.Lock()
+			g.calls = append(g.calls, c)
+			g.mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"id":"g","object":"chat.completion","model":"meta-llama/Llama-Guard-3-8B","choices":[{"index":0,"message":{"role":"assistant","content":"safe"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}}`)
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	return g
+}
+
+func (g *fakeGuard) Calls() []guardCall {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return append([]guardCall(nil), g.calls...)
+}
+
+// setupControlFakes starts the fakes a scenario's features ask for and adds
+// their configuration to the topology.
+func (w *World) setupControlFakes(topo *Topology) error {
+	if w.Sc.F.Guard {
+		w.Guard = newFakeGuard()
+		w.closers = append(w.closers, w.Guard.srv.Close)
+		topo.Extra += fmt.Sprintf(`pool "guard" {
+  capacity = 4
+}
+model "llama-guard" {
+  upstream_model = "meta-llama/Llama-Guard-3-8B"
+  pool = "guard"
+  class = "guard"
+  key_file = "@DIR@/upstream.key"
+  upstream "g0" {
+    base_url = %q
+  }
+}
+guardrail "lg" {
+  type = "llama_guard"
+  model = "llama-guard"
+  orgs = [%q]
+  action = "block"
+}
+`, w.Guard.srv.URL, Borrower)
+	}
+	if w.Sc.F.Fallback {
+		w.Small = NewUpstream(24)
+		w.closers = append(w.closers, w.Small.Close)
+		topo.ModelExtra = "  fallbacks = [\"fake-small\"]\n  fallback_on = [\"unavailable\", \"saturated\"]\n  saturation_waiting = 2\n"
+		topo.Extra += fmt.Sprintf(`pool "small" {
+  capacity = 2
+  borrow = "spare"
+}
+model "fake-small" {
+  upstream_model = "fake"
+  pool = "small"
+  class = "interactive"
+  key_file = "@DIR@/upstream.key"
+  max_output_tokens = 256
+  max_model_len = %d
+  saturation_waiting = 2
+  upstream "n2" {
+    base_url = %q
+  }
+}
+`, MaxModelLen, w.Small.URL())
+	}
+	return nil
+}
+
+func init() {
+	// both vLLM queues report Arg waiting requests from now on
+	faultTable["saturate"] = func(w *World, f FaultAt) (func(), error) {
+		w.mu.Lock()
+		w.satAt = time.Now()
+		w.mu.Unlock()
+		w.Up.PreemptionBurst(0, int64(f.Arg))
+		if w.Small != nil {
+			w.Small.PreemptionBurst(0, int64(f.Arg))
+		}
+		return func() {
+			w.Up.Calm()
+			if w.Small != nil {
+				w.Small.Calm()
+			}
+		}, nil
+	}
+}
+
+// ---- control spare-guard: gateway v0.38.0, "a refused request costs no guard call" ----
+
+// spareGuardProbe: the borrower (tiers, share 0, borrow = spare) has a
+// llama_guard guardrail; the owners keep the pool full, so most borrower
+// requests are refused 429 for lack of spare capacity. v0.37.1 ran the guard
+// model for every one of them, at priority 0 (ahead of the owners' work);
+// v0.38.0 takes the slot first and runs the guard, at the request's own band,
+// only for a request admitted. So: guard calls <= the borrower's requests the
+// upstream received (a small margin for a request abandoned in between), and no
+// call at priority 0.
+func (w *World) spareGuardProbe() (problems, notes []string) {
+	if !w.Sc.expects("spare-guard") || w.Guard == nil {
+		return nil, nil
+	}
+	calls := w.Guard.Calls()
+	var admitted, refused int
+	for _, s := range w.Up.Seen() {
+		if s.Org == Borrower {
+			admitted++
+		}
+	}
+	for _, o := range w.Ledger.All() {
+		if o.Org == Borrower && o.Status == 429 {
+			refused++
+		}
+	}
+	zero := 0
+	for _, c := range calls {
+		if c.BodyPrio == 0 || c.HeaderPrio == "0" {
+			zero++
+		}
+	}
+	switch {
+	case refused < 10 || admitted < 5:
+		problems = append(problems, fmt.Sprintf("spare-guard: %d borrower requests refused and %d admitted: the pool was not contended, the probe proves nothing", refused, admitted))
+	case len(calls) > admitted+3:
+		problems = append(problems, fmt.Sprintf("spare-guard: %d guard-model calls for %d borrower requests that reached the upstream (%d were refused 429): a refused request must cost no guard call", len(calls), admitted, refused))
+	}
+	if zero > 0 {
+		problems = append(problems, fmt.Sprintf("spare-guard: %d guard-model calls ran at vLLM priority 0, ahead of the owners' work (want the priority of the request judged)", zero))
+	}
+	if len(problems) == 0 {
+		notes = append(notes, fmt.Sprintf("spare-guard: %d guard calls, %d admitted, %d refused 429, none at priority 0", len(calls), admitted, refused))
+	}
+	return
+}
+
+// ---- control fallback-spare: gateway v0.38.0, "the saturation fallback takes its slot through the same test" ----
+
+// fallbackSpareProbe: both vLLM queues report 5 waiting requests (saturation
+// threshold 2) from satAt on; only the borrower sends traffic. Its request is
+// refused on the main pool (saturated, spare-only), falls back on "saturated" to
+// the small pool, whose queue is saturated too: v0.38.0 refuses it there (429),
+// v0.37.1 skipped the test and admitted it: the small upstream receives it.
+func (w *World) fallbackSpareProbe() (problems, notes []string) {
+	if !w.Sc.expects("fallback-spare") || w.Small == nil {
+		return nil, nil
+	}
+	w.mu.Lock()
+	sat := w.satAt
+	w.mu.Unlock()
+	if sat.IsZero() {
+		return []string{"fallback-spare: the queues were never saturated"}, nil
+	}
+	from := sat.Add(3 * time.Second) // the health loop scrapes every second
+	var hits, attempts, before int
+	for _, s := range w.Small.Seen() {
+		if s.Started.After(from) {
+			hits++
+		}
+	}
+	for _, o := range w.Ledger.All() {
+		switch {
+		case o.Org == Borrower && o.At.After(from):
+			attempts++
+		case o.Org == Borrower && o.At.Before(sat) && o.Status == 200:
+			before++
+		}
+	}
+	switch {
+	case attempts < 10 || before < 1:
+		problems = append(problems, fmt.Sprintf("fallback-spare: %d borrower requests after the saturation and %d answered before it: the probe proves nothing", attempts, before))
+	case hits > 0:
+		problems = append(problems, fmt.Sprintf("fallback-spare: %d borrower requests took a slot in the fallback pool whose vLLM queue is saturated, of %d sent (want 0: a spare-only organisation is refused there)", hits, attempts))
+	default:
+		notes = append(notes, fmt.Sprintf("fallback-spare: %d borrower requests after the saturation, none reached the saturated fallback pool", attempts))
 	}
 	return
 }

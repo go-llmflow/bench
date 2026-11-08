@@ -64,6 +64,8 @@ type Topology struct {
 	NoModelLen  bool // leave max_model_len out: learnt from /v1/models
 	// Extra HCL appended verbatim (a scenario's own settings).
 	Extra string
+	// ModelExtra is HCL inside the main model's block (fallbacks, say).
+	ModelExtra string
 	// PG is a PostgreSQL DSN; "" means the memory store.
 	PG string
 	// HA is set for each replica of an HA pair.
@@ -208,6 +210,7 @@ func (g *Gateway) config() string {
 	if !t.NoModelLen { // else the gateway must learn L from GET /v1/models
 		p("  max_model_len = %d\n", MaxModelLen)
 	}
+	b.WriteString(t.ModelExtra)
 	p("  cost {\n    input_per_mtok = %v\n    output_per_mtok = %v\n    cached_per_mtok = %v\n  }\n", PriceIn, PriceOut, PriceCached)
 	p("  upstream \"n1\" {\n    base_url = %q\n", t.UpstreamURL)
 	if t.DCGMURL != "" {
@@ -266,7 +269,7 @@ func (g *Gateway) config() string {
 	if t.Federation {
 		p("federation \"ilaas\" {\n  prefix = %q\n  org = %q\n  metrics_networks = [\"127.0.0.0/8\"]\n}\n", FedPrefix, Borrower)
 	}
-	b.WriteString(t.Extra)
+	b.WriteString(strings.ReplaceAll(t.Extra, "@DIR@", g.Dir))
 	return b.String()
 }
 

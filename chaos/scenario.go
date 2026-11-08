@@ -6,6 +6,8 @@ import "time"
 type Features struct {
 	Fluids, Federation, IdPs, BMC, Budgets bool
 	ModelsDownAtStart                      bool // /v1/models answers 503 until a fault lifts it
+	Guard                                  bool // a llama_guard guardrail on the borrower, with a counting fake guard model
+	Fallback                               bool // a second model and pool, the main model's saturation fallback
 }
 
 // OrgLoad is the traffic of one organisation: Workers closed-loop clients, each
