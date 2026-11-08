@@ -165,22 +165,52 @@ func (w *World) spoolFairProbe() (problems, notes []string) {
 	if !w.Sc.expects("spool-fair") {
 		return nil, nil
 	}
-	var bServed, aRefused int
-	for _, o := range w.Ledger.All() {
+	w.mu.Lock()
+	var from, to time.Time
+	for _, sp := range w.spans {
+		if sp.Kind == "pg-hang" {
+			from, to = sp.From, sp.To
+		}
+	}
+	w.mu.Unlock()
+	if from.IsZero() {
+		return []string{"spool-fair: PostgreSQL never hung"}, nil
+	}
+	return spoolFairProblems(w.Ledger.All(), from, to)
+}
+
+// spoolFairProblems judges the window from 3 s into the hang (the spool has
+// filled by then) to 1 s before its end: etabB, which floods nothing, must be
+// served at least half of the time, and the flooder must be refused 503 at
+// least once. v0.38.1 refuses every budgeted request once the spool is full
+// ("requests under a budget are refused until it is emptied"), the innocent
+// included; v0.39.0 refuses only the organisation that holds most of it.
+func spoolFairProblems(outs []Outcome, from, to time.Time) (problems, notes []string) {
+	lo, hi := from.Add(3*time.Second), to.Add(-time.Second)
+	var bAttempts, bServed, aRefused int
+	for _, o := range outs {
+		if o.At.Before(lo) || o.At.After(hi) || o.Left || o.Status == 0 {
+			continue
+		}
 		switch {
-		case o.Org == "etabB" && o.Status == 200:
-			bServed++
-		case o.Org == "etabA" && o.Status == 503 && strings.Contains(o.Body, "spool"):
+		case o.Org == "etabB":
+			bAttempts++
+			if o.Status == 200 {
+				bServed++
+			}
+		case o.Org == "etabA" && o.Status == 503:
 			aRefused++
 		}
 	}
 	switch {
-	case bServed < 20:
-		problems = append(problems, fmt.Sprintf("spool-fair: etabB was served only %d times: the gateway stopped serving the other organisations", bServed))
+	case bAttempts < 15:
+		problems = append(problems, fmt.Sprintf("spool-fair: etabB sent only %d requests in the window: the probe proves nothing", bAttempts))
+	case bServed*2 < bAttempts:
+		problems = append(problems, fmt.Sprintf("spool-fair: etabB, which floods nothing, was served %d of %d times while the spool was full: one organisation filled it for everyone", bServed, bAttempts))
 	case aRefused == 0:
-		problems = append(problems, "spool-fair: the flooding organisation was never refused for the spool: the probe proves nothing (or the spool was not filled)")
+		problems = append(problems, "spool-fair: the flooding organisation was never refused while the spool was full: the probe proves nothing")
 	default:
-		notes = append(notes, fmt.Sprintf("spool-fair: etabB served %d times, the flooder refused for the spool %d times", bServed, aRefused))
+		notes = append(notes, fmt.Sprintf("spool-fair: etabB served %d of %d times in the window, the flooder refused %d times", bServed, bAttempts, aRefused))
 	}
 	return
 }

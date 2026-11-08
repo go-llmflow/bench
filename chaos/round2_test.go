@@ -194,30 +194,34 @@ func TestNAdmissionJudge(t *testing.T) {
 }
 
 func TestSpoolFairJudge(t *testing.T) {
-	mk := func(bServed, aRefused int) *World {
-		w := adminFake(t, nil, nil)
-		w.Sc = &Scenario{Name: "t", Expect: []string{"spool-fair"}}
-		id := 0
-		add := func(org string, status int, body string) {
-			id++
-			w.Ledger.Add(Outcome{Req: Req{ID: id, Org: org}, Status: status, Body: body})
-		}
+	from := time.Now()
+	to := from.Add(10 * time.Second)
+	mk := func(bServed, bRefused, aRefused int) []Outcome {
+		at := from.Add(5 * time.Second)
+		var out []Outcome
 		for i := 0; i < bServed; i++ {
-			add("etabB", 200, "")
+			out = append(out, Outcome{Req: Req{Org: "etabB"}, Status: 200, At: at})
+		}
+		for i := 0; i < bRefused; i++ {
+			out = append(out, Outcome{Req: Req{Org: "etabB"}, Status: 503, At: at})
 		}
 		for i := 0; i < aRefused; i++ {
-			add("etabA", 503, `{"error":{"message":"accounting spool: organisation share (spool_org_share)"}}`)
+			out = append(out, Outcome{Req: Req{Org: "etabA"}, Status: 503, At: at})
 		}
-		return w
+		return out
 	}
-	if p, _ := mk(100, 50).spoolFairProbe(); len(p) != 0 {
+	if p, _ := spoolFairProblems(mk(100, 5, 50), from, to); len(p) != 0 {
 		t.Fatalf("a fair spool: %v", p)
 	}
-	if p, _ := mk(5, 50).spoolFairProbe(); !has(p, "stopped serving the other") {
-		t.Fatalf("the others starved: %v", p)
+	// planted: the innocent is refused with the flooder (v0.38.1: every budgeted request)
+	if p, _ := spoolFairProblems(mk(10, 90, 50), from, to); !has(p, "filled it for everyone") {
+		t.Fatalf("the innocent refused passed: %v", p)
 	}
-	if p, _ := mk(100, 0).spoolFairProbe(); !has(p, "never refused") {
+	if p, _ := spoolFairProblems(mk(100, 0, 0), from, to); !has(p, "never refused") {
 		t.Fatalf("a flooder never refused: %v", p)
+	}
+	if p, _ := spoolFairProblems(mk(3, 0, 50), from, to); !has(p, "proves nothing") {
+		t.Fatalf("too few requests: %v", p)
 	}
 }
 
