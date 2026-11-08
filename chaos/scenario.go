@@ -63,6 +63,9 @@ type Scenario struct {
 	Skip map[int]string
 	// Expect adds scenario specific checks by name (see checks.go).
 	Expect []string
+	// ControlSince: a positive control, which must FAIL on gateway releases
+	// older than this tag and PASS from it on (see ExpectedToFail).
+	ControlSince string
 }
 
 // rampAt is when the last owner's workers start.

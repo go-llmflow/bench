@@ -842,6 +842,7 @@ func inv9(w *World, j *join) Verdict {
 			high++
 		}
 	}
+	low, high = low+w.fedProbes, high+w.fedProbes
 	finiteLast, _ = histValue(text, "vllm:time_to_first_token_seconds_bucket", `le="2560.0"`)
 	if cnt < low || cnt > high {
 		problems = append(problems, fmt.Sprintf("count %v, the dispatcher's requests that were answered or refused: %v..%v", cnt, low, high))

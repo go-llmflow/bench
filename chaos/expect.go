@@ -36,6 +36,10 @@ func skewAccepted(s time.Duration) (accepted, decided bool) {
 }
 
 func (w *World) authProblems(j *join) (problems []string, notes []string) {
+	defer func() {
+		p, n := w.schacSpoofProbe()
+		problems, notes = append(problems, p...), append(notes, n...)
+	}()
 	w.mu.Lock()
 	spans := append([]faultSpan(nil), w.spans...)
 	w.mu.Unlock()
@@ -140,4 +144,46 @@ func (w *World) firstClientOf(idp string) (Client, bool) {
 		}
 	}
 	return Client{}, false
+}
+
+// schacSpoofProbe is the positive control of gateway v0.38.0's HIGH finding
+// "a token's institution is its name's scope": the federation issuer accepts
+// schac_home_organization = univ-c.example, and a token whose NAME is scoped to
+// another institution (eve@univ-e.example) but which states that value must be
+// refused (401). v0.37.1 accepted it (filter on the claim only). Only scenarios
+// that list "schac-spoof" in Expect run it; a control token (the proper scope)
+// must still be accepted, or the probe proves nothing.
+func (w *World) schacSpoofProbe() (problems, notes []string) {
+	on := false
+	for _, e := range w.Sc.Expect {
+		on = on || e == "schac-spoof"
+	}
+	if !on || w.IdPs["fed"] == nil {
+		return nil, nil
+	}
+	c, ok := w.firstClientOf("fed")
+	if !ok {
+		return nil, nil
+	}
+	ask := func(name string, id int) int {
+		tok, err := w.IdPs["fed"].Mint("eve", time.Minute, map[string]any{"schac_home_organization": "univ-c.example", "preferred_username": name})
+		if err != nil {
+			return -1
+		}
+		o := Do(context.Background(), NewClient(), w.Primary().URL, Req{ID: id, Org: c.Org, Team: c.Team, Who: c.Who, Prefix: c.Prefix, Cred: Cred{Bearer: tok}, MaxTokens: 16, Words: 4, Marker: fmt.Sprintf("MKprobe-schac-%d", id)})
+		return o.Status
+	}
+	// 200, or 429 when the borrower's budget is spent by now: either way the
+	// token was accepted (authentication comes first), which is the control.
+	if got := ask("eve@univ-c.example", 99_999_901); got != 200 && got != 429 {
+		problems = append(problems, fmt.Sprintf("schac control: a token scoped to its institution was answered %d (want 200, or 429 with a spent budget): the probe proves nothing", got))
+		return
+	}
+	w.fedProbes++
+	if got := ask("eve@univ-e.example", 99_999_902); got != 401 {
+		problems = append(problems, fmt.Sprintf("schac spoof: a token named eve@univ-e.example stating schac_home_organization=univ-c.example was answered %d (want 401: the name's scope must equal a value of the claim)", got))
+	} else {
+		notes = append(notes, "schac spoof: eve@univ-e.example stating univ-c.example got 401; the control token got 200")
+	}
+	return
 }

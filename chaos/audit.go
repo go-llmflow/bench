@@ -86,3 +86,81 @@ func Audit(rs []Result, seeds []int) []string {
 	sort.Strings(out)
 	return out
 }
+
+// ControlSince is set on a scenario that is a positive control: it must FAIL on
+// gateway releases older than this tag and PASS from it on.
+//
+// ExpectedToFail says whether, for the release tag, the scenario is such a
+// control that must fail. An unparsable tag is never a control run.
+func ExpectedToFail(sc *Scenario, tag string) bool {
+	if sc == nil || sc.ControlSince == "" {
+		return false
+	}
+	a, ok1 := semver(tag)
+	b, ok2 := semver(sc.ControlSince)
+	if !ok1 || !ok2 {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return a[i] < b[i]
+		}
+	}
+	return false
+}
+
+func semver(t string) (v [3]int, ok bool) {
+	n, err := fmt.Sscanf(t, "v%d.%d.%d", &v[0], &v[1], &v[2])
+	return v, err == nil && n == 3
+}
+
+// AuditTag is Audit for a campaign against the release tag: the controls that
+// must fail on it are required to fail (a control that passes on the old
+// release proves nothing) and their failures are not problems.
+func AuditTag(rs []Result, seeds []int, tag string) []string {
+	var keep []Result
+	var out []string
+	for _, r := range rs {
+		sc := Find(r.Scenario)
+		if !ExpectedToFail(sc, tag) {
+			keep = append(keep, r)
+			continue
+		}
+		failed := false
+		for _, v := range r.Verdicts {
+			failed = failed || v.Status == Fail
+		}
+		if !failed && r.Err == "" && r.Skipped == "" {
+			out = append(out, fmt.Sprintf("%s/%d: positive control did not fail on %s", r.Scenario, r.Seed, tag))
+		}
+		if r.Err != "" || r.Skipped != "" || r.Requests == 0 {
+			out = append(out, fmt.Sprintf("%s/%d: control run broke (%s%s)", r.Scenario, r.Seed, r.Err, r.Skipped))
+		}
+	}
+	out = append(out, Audit(keep, seeds)...)
+	// the controls removed from keep are not "missing": drop those lines
+	var res []string
+	for _, l := range out {
+		miss := false
+		for _, r := range rs {
+			if ExpectedToFail(Find(r.Scenario), tag) && l == fmt.Sprintf("%s/%d: missing from the campaign", r.Scenario, r.Seed) {
+				miss = true
+			}
+		}
+		if !miss {
+			res = append(res, l)
+		}
+	}
+	sort.Strings(res)
+	return res
+}
+
+// HasFail reports whether an invariant of the run failed.
+func (r Result) HasFail() bool {
+	for _, v := range r.Verdicts {
+		if v.Status == Fail {
+			return true
+		}
+	}
+	return false
+}
