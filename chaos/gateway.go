@@ -148,7 +148,7 @@ func NewGateway(bin, dir string, t Topology) (*Gateway, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	for _, f := range []string{"master.key", "salt.key", "upstream.key", "ha.secret"} {
+	for _, f := range []string{"master.key", "salt.key", "upstream.key", "ha.secret", "scim.token"} {
 		if err := os.WriteFile(filepath.Join(dir, f), []byte("chaos-"+randHex(24)+"\n"), 0o600); err != nil {
 			return nil, err
 		}

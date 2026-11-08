@@ -1,0 +1,123 @@
+package chaos
+
+import (
+	"strings"
+	"testing"
+	"time"
+)
+
+func has(ps []string, want string) bool {
+	return strings.Contains(strings.Join(ps, "\n"), want)
+}
+
+func TestFloodJudgeFlagsEveryPlantedBreakage(t *testing.T) {
+	if p := floodProblems("x", 100, 0, 0); len(p) != 0 {
+		t.Fatalf("a clean flood: %v", p)
+	}
+	if p := floodProblems("x", 0, 0, 0); !has(p, "proves nothing") {
+		t.Fatalf("a flood that sent nothing: %v", p)
+	}
+	if p := floodProblems("x", 100, 3, 0); !has(p, "3 of 103") {
+		t.Fatalf("hostile requests that failed: %v", p)
+	}
+	if p := floodProblems("x", 100, 0, 2); !has(p, "more than 5 s") {
+		t.Fatalf("hostile requests that took long: %v", p)
+	}
+	var f floodStats
+	f.add(200, time.Second)
+	f.add(429, time.Second)
+	f.add(500, time.Second)
+	f.add(200, 6*time.Second)
+	if f.ok.Load() != 3 || f.bad.Load() != 1 || f.slow.Load() != 1 {
+		t.Fatalf("floodStats %d %d %d", f.ok.Load(), f.bad.Load(), f.slow.Load())
+	}
+}
+
+func TestSchacChangeJudge(t *testing.T) {
+	at := time.Now()
+	mk := func(off time.Duration, status int) Outcome {
+		return Outcome{IdP: "fed", Status: status, At: at.Add(off)}
+	}
+	good := []Outcome{mk(-5*time.Second, 200), mk(-3*time.Second, 200), mk(3*time.Second, 401), mk(5*time.Second, 401)}
+	if p, _ := schacChangeProblems(good, at); len(p) != 0 {
+		t.Fatalf("a correct gateway: %v", p)
+	}
+	// planted: the gateway keeps accepting the new value
+	bad := append([]Outcome(nil), good...)
+	bad[3] = mk(5*time.Second, 200)
+	if p, _ := schacChangeProblems(bad, at); !has(p, "not refused") {
+		t.Fatalf("an accepted new schac passed: %v", p)
+	}
+	// planted: the gateway refuses before the change
+	early := append([]Outcome(nil), good...)
+	early[0] = mk(-5*time.Second, 401)
+	if p, _ := schacChangeProblems(early, at); !has(p, "refused before") {
+		t.Fatalf("a refusal before the change passed: %v", p)
+	}
+	if p, _ := schacChangeProblems(good[:2], at); !has(p, "proves nothing") {
+		t.Fatalf("no request after the change: %v", p)
+	}
+}
+
+func TestTrendJudge(t *testing.T) {
+	t0 := time.Now()
+	mk := func(n int, rss func(i int) int64, fds func(i int) int, spool func(i int) int64) []trendSample {
+		var ss []trendSample
+		for i := 0; i < n; i++ {
+			ss = append(ss, trendSample{At: t0.Add(time.Duration(i) * 10 * time.Second), RSSKB: rss(i), FDs: fds(i), SpoolKB: spool(i)})
+		}
+		return ss
+	}
+	flat := mk(60, func(int) int64 { return 100 << 10 }, func(int) int { return 30 }, func(int) int64 { return 100 })
+	if p, _ := trendProblems(flat); len(p) != 0 {
+		t.Fatalf("a flat run: %v", p)
+	}
+	leakMem := mk(60, func(i int) int64 { return int64(100<<10 + i*4<<10) }, func(int) int { return 30 }, func(int) int64 { return 100 })
+	if p, _ := trendProblems(leakMem); !has(p, "resident memory grew") {
+		t.Fatalf("a memory leak passed: %v", p)
+	}
+	leakFD := mk(60, func(int) int64 { return 100 << 10 }, func(i int) int { return 30 + i }, func(int) int64 { return 100 })
+	if p, _ := trendProblems(leakFD); !has(p, "descriptors grew") {
+		t.Fatalf("a descriptor leak passed: %v", p)
+	}
+	spool := mk(60, func(int) int64 { return 100 << 10 }, func(int) int { return 30 }, func(i int) int64 { return int64(i * 400) })
+	if p, _ := trendProblems(spool); !has(p, "spool reached") {
+		t.Fatalf("a growing spool passed: %v", p)
+	}
+	if p, _ := trendProblems(flat[:5]); !has(p, "too short") {
+		t.Fatalf("a short run: %v", p)
+	}
+	// an unknown RSS (not Linux) is not a leak
+	unknown := mk(60, func(int) int64 { return -1 }, func(int) int { return 30 }, func(int) int64 { return 100 })
+	if p, _ := trendProblems(unknown); len(p) != 0 {
+		t.Fatalf("an unknown RSS: %v", p)
+	}
+}
+
+func TestDriftJudge(t *testing.T) {
+	start := time.Now()
+	total := 6 * time.Minute
+	gen := func(share func(window int) [3]int) []Outcome {
+		var out []Outcome
+		for w := 0; w < 6; w++ {
+			c := share(w)
+			for k, org := range []string{"etabA", "etabB", "etabC"} {
+				for i := 0; i < c[k]; i++ {
+					out = append(out, Outcome{Req: Req{Org: org}, Status: 200, At: start.Add(time.Duration(w)*time.Minute + time.Duration(i)*time.Millisecond)})
+				}
+			}
+		}
+		return out
+	}
+	steady := gen(func(int) [3]int { return [3]int{50, 30, 20} })
+	if p, _ := driftProblems(steady, start, total, 6); len(p) != 0 {
+		t.Fatalf("a steady run: %v", p)
+	}
+	drift := gen(func(w int) [3]int { return [3]int{50 + w*6, 30 - w*3, 20 - w*3} })
+	if p, _ := driftProblems(drift, start, total, 6); !has(p, "moved from") {
+		t.Fatalf("a drifting share passed: %v", p)
+	}
+	if p, _ := driftProblems(steady[:60], start, total, 6); !has(p, "proves nothing") {
+		t.Fatalf("empty windows: %v", p)
+	}
+}

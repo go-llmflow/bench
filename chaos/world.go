@@ -80,8 +80,16 @@ type World struct {
 	samples []inflightSample
 	// Guard is the counting fake guard model, Small the fallback model's upstream.
 	satAt time.Time // when the saturate fault started
-	Guard *fakeGuard
-	Small *Upstream
+	// round 2: the relay in front of the upstream, the hostile clients' answers,
+	// the schac the federation IdP states, the long run's samples
+	UpProxy       *Proxy
+	adminFlood    floodStats
+	fedFlood      floodStats
+	schacAt       time.Time
+	schacOverride string
+	trends        []trendSample
+	Guard         *fakeGuard
+	Small         *Upstream
 	// oldToken is a token signed before a hard rotation, per IdP, kept to be
 	// presented afterwards.
 	oldToken map[string]string
@@ -330,6 +338,11 @@ func (w *World) mintFor(idp, sub, scoped string, ttl time.Duration) (string, err
 	extra := map[string]any{}
 	if idp == "fed" {
 		extra["schac_home_organization"] = "univ-c.example"
+		w.mu.Lock()
+		if w.schacOverride != "" {
+			extra["schac_home_organization"] = w.schacOverride
+		}
+		w.mu.Unlock()
 		// gateway v0.38.0 (breaking): the scope of the person's name must equal a
 		// value of the schac claim, so a federation proxy's token carries a
 		// scoped name. v0.37.1 accepts it too: the scope is in the accept list.

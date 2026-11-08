@@ -7,6 +7,8 @@ type Features struct {
 	Fluids, Federation, IdPs, BMC, Budgets bool
 	ModelsDownAtStart                      bool // /v1/models answers 503 until a fault lifts it
 	Guard                                  bool // a llama_guard guardrail on the borrower, with a counting fake guard model
+	UpstreamNet                            bool // a relay between the gateway and the upstream (net-slow, net-loss)
+	SCIM                                   bool // a scim block (domain s.example, group "Lab Physics" on etabA's team)
 	Fallback                               bool // a second model and pool, the main model's saturation fallback
 }
 

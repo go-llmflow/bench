@@ -63,7 +63,7 @@ func Catalogue() []*Scenario {
 		with(Scenario{Name: "idp-schac-spoof", Doc: "POSITIVE CONTROL (v0.38.0 fix): a federation token whose name is scoped to another institution but states the accepted schac value must be refused", F: full(), Duration: s(10), Load: steady(),
 			Expect: []string{"schac-spoof"}, ControlSince: "v0.38.0"}),
 		with(Scenario{Name: "control-admin-users", Doc: "POSITIVE CONTROL (v0.38.0 fix): an org admin of B creates a bare and a foreign-domain user through POST /admin/users; both must be refused and the gateway must restart",
-			F: Features{IdPs: true}, Duration: s(4), Load: map[string]OrgLoad{"etabA": {Workers: 1, Think: 200 * time.Millisecond, Tokens: []int{16}, Words: []int{6}}},
+			F: Features{IdPs: true, SCIM: true}, Duration: s(4), Load: map[string]OrgLoad{"etabA": {Workers: 1, Think: 200 * time.Millisecond, Tokens: []int{16}, Words: []int{6}}},
 			Expect: []string{"admin-users"}, ControlSince: "v0.38.0"}),
 		with(Scenario{Name: "control-spare-guard", Doc: "POSITIVE CONTROL (v0.38.0 fix): the owners keep the pool full, a guarded spare-only borrower is refused 429: a refused request must cost no guard-model call, and a guard call never runs at priority 0",
 			F: Features{Guard: true}, Duration: s(14), UpstreamLatency: 400 * time.Millisecond,
@@ -164,7 +164,7 @@ func Catalogue() []*Scenario {
 			Faults: []FaultAt{{Kind: "idp-down", Target: "idpA", At: s(3), For: s(7)}, {Kind: "idp-down", Target: "idpB", At: s(3), For: s(7)},
 				{Kind: "idp-down", Target: "fed", At: s(3), For: s(7)}}}),
 	}
-	return cat
+	return append(cat, round2()...)
 }
 
 // pgOne is a single-gateway scenario on PostgreSQL (CI): operations that need a

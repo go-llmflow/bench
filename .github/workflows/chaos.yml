@@ -21,13 +21,17 @@ jobs:
     # scenario is not entitled to, and any scenario x seed no shard ran.
     name: chaos ${{ matrix.group }} gateway ${{ matrix.tag }}
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: ${{ matrix.timeout || 120 }}
     strategy:
       fail-fast: false
       matrix:
-        tag: [v0.37.1, v0.38.0, v0.38.1]
-        group: [upstream, load, idp-bmc, shares-combined, ha, pg-ops]
+        tag: [v0.38.0, v0.38.1]
+        group: [upstream, load, idp-bmc, shares-combined, ha, pg-ops, hostile, net-idp, ha2, long]
         include:
+          - { group: hostile, scenarios: 'hostile-borrower-flood hostile-admin-flood hostile-fed-metrics-hammer combined-hostile-tenants' }
+          - { group: net-idp, scenarios: 'idp-schac-change net-upstream-latency net-upstream-loss combined-net-loss-idp-down-disconnects combined-schac-change-and-key-rotation' }
+          - { group: ha2, scenarios: 'net-replica-link-slow ha-budget-edge migrate-users-ha combined-saturation-pg-hang-replica-kill combined-partition-kill-budget-edge combined-month-close-bmc-reset-pg-slow' }
+          - { group: long, scenarios: 'long-mixed-traffic', timeout: 330 }
           - { group: upstream, scenarios: 'baseline upstream-5xx upstream-5xx-all upstream-hang upstream-slow-tokens upstream-cut-sse upstream-wrong-usage control-n-slots control-admin-users' }
           - { group: load, scenarios: 'models-down-at-start preemption-burst client-disconnects retry-storm-n-best-of budget-edge-burst' }
           - { group: idp-bmc, scenarios: 'idp-jwks-down idp-jwks-rotated idp-schac-spoof control-spare-guard control-fallback-spare idp-clock-skew bmc-offline bmc-counter-reset bmc-power-only' }
@@ -87,7 +91,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        tag: [v0.37.1, v0.38.0, v0.38.1]
+        tag: [v0.38.0, v0.38.1]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v5
@@ -133,8 +137,7 @@ jobs:
           path: evidence
       - name: diff
         run: >-
-          go run ./cmd/llmchaos diff evidence/chaos-evidence-v0.37.1/chaos-results.json evidence/chaos-evidence-v0.38.0/chaos-results.json > chaos-diff.txt 2>&1;
-          go run ./cmd/llmchaos diff evidence/chaos-evidence-v0.38.0/chaos-results.json evidence/chaos-evidence-v0.38.1/chaos-results.json >> chaos-diff.txt 2>&1
+          go run ./cmd/llmchaos diff evidence/chaos-evidence-v0.38.0/chaos-results.json evidence/chaos-evidence-v0.38.1/chaos-results.json > chaos-diff.txt 2>&1
       - name: summary
         if: always()
         run: cat chaos-diff.txt >> "$GITHUB_STEP_SUMMARY"

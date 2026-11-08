@@ -158,6 +158,10 @@ func Run(ctx context.Context, opt Options, sc *Scenario) (res Result) {
 			}
 		}(i, f)
 	}
+	if sc.expects("long-run") {
+		wg.Add(1)
+		go func() { defer wg.Done(); w.sampleTrends(runCtx, loadEnd) }()
+	}
 	if sc.expects("n-slots") {
 		wg.Add(1)
 		go func() { defer wg.Done(); w.sampleInflight(runCtx, loadEnd) }()
