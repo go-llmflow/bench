@@ -25,7 +25,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        tag: [v0.38.0, v0.38.1]
+        tag: [v0.38.0, v0.38.1, v0.39.0]
         group: [upstream, load, idp-bmc, shares-combined, ha, pg-ops, hostile, net-idp, ha2, long]
         include:
           - { group: hostile, scenarios: 'hostile-borrower-flood hostile-admin-flood hostile-fed-metrics-hammer combined-hostile-tenants' }
@@ -34,10 +34,10 @@ jobs:
           - { group: long, scenarios: 'long-mixed-traffic', timeout: 330 }
           - { group: upstream, scenarios: 'baseline upstream-5xx upstream-5xx-all upstream-hang upstream-slow-tokens upstream-cut-sse upstream-wrong-usage control-n-slots control-admin-users' }
           - { group: load, scenarios: 'models-down-at-start preemption-burst client-disconnects retry-storm-n-best-of budget-edge-burst' }
-          - { group: idp-bmc, scenarios: 'idp-jwks-down idp-jwks-rotated idp-schac-spoof control-spare-guard control-fallback-spare idp-clock-skew bmc-offline bmc-counter-reset bmc-power-only' }
+          - { group: idp-bmc, scenarios: 'idp-jwks-down idp-jwks-rotated idp-schac-spoof control-spare-guard control-fallback-spare control-schac-institution control-shared-scim control-dcgm-glitch idp-clock-skew bmc-offline bmc-counter-reset bmc-power-only' }
           - { group: shares-combined, scenarios: 'ilaas-saturates-while-owners-ramp combined-upstream-and-clients combined-saturation-5xx-and-owner-ramp combined-jwks-outage-and-retry-storm' }
           - { group: ha, scenarios: 'ha-replica-kill ha-partition ha-config-reload ha-kill-during-pg-restart' }
-          - { group: pg-ops, scenarios: 'pg-restart pg-slow-queries month-close-during-traffic migrate-users-mid-traffic combined-bmc-reset-and-month-close control-recorder-stall' }
+          - { group: pg-ops, scenarios: 'pg-restart pg-slow-queries month-close-during-traffic migrate-users-mid-traffic combined-bmc-reset-and-month-close control-recorder-stall control-spool-fair' }
     env:
       GATEWAY_TAG: ${{ matrix.tag }}
     services:
@@ -91,7 +91,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        tag: [v0.38.0, v0.38.1]
+        tag: [v0.38.0, v0.38.1, v0.39.0]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v5
@@ -137,7 +137,8 @@ jobs:
           path: evidence
       - name: diff
         run: >-
-          go run ./cmd/llmchaos diff evidence/chaos-evidence-v0.38.0/chaos-results.json evidence/chaos-evidence-v0.38.1/chaos-results.json > chaos-diff.txt 2>&1
+          go run ./cmd/llmchaos diff evidence/chaos-evidence-v0.38.0/chaos-results.json evidence/chaos-evidence-v0.38.1/chaos-results.json > chaos-diff.txt 2>&1;
+          go run ./cmd/llmchaos diff evidence/chaos-evidence-v0.38.1/chaos-results.json evidence/chaos-evidence-v0.39.0/chaos-results.json >> chaos-diff.txt 2>&1
       - name: summary
         if: always()
         run: cat chaos-diff.txt >> "$GITHUB_STEP_SUMMARY"

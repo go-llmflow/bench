@@ -17,13 +17,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        tag: [v0.38.0, v0.38.1]
+        tag: [v0.38.0, v0.38.1, v0.39.0]
         set: [controls, hostile-net, pg, long-smoke]
         include:
           - { set: long-smoke, scenarios: 'long-mixed-traffic --duration 4m' }
-          - { set: controls, scenarios: 'idp-schac-spoof control-n-slots control-admin-users control-spare-guard control-fallback-spare control-recorder-stall' }
+          - { set: controls, scenarios: 'idp-schac-spoof control-n-slots control-admin-users control-spare-guard control-fallback-spare control-recorder-stall control-schac-institution control-shared-scim control-dcgm-glitch' }
           - { set: hostile-net, scenarios: 'hostile-borrower-flood hostile-admin-flood hostile-fed-metrics-hammer combined-hostile-tenants idp-schac-change net-upstream-latency net-upstream-loss combined-net-loss-idp-down-disconnects combined-schac-change-and-key-rotation' }
-          - { set: pg, scenarios: 'net-replica-link-slow ha-budget-edge migrate-users-ha combined-saturation-pg-hang-replica-kill combined-partition-kill-budget-edge combined-month-close-bmc-reset-pg-slow' }
+          - { set: pg, scenarios: 'net-replica-link-slow ha-budget-edge migrate-users-ha combined-saturation-pg-hang-replica-kill combined-partition-kill-budget-edge combined-month-close-bmc-reset-pg-slow control-spool-fair' }
     services:
       postgres:
         image: postgres:17
@@ -45,6 +45,11 @@ jobs:
         run: GOBIN="$GITHUB_WORKSPACE/.chaos-bin" go install "github.com/go-llmflow/gateway/cmd/llmflow-gateway@${{ matrix.tag }}"
       - name: the throwaway database's DSN, in a file
         run: printf 'postgres://postgres:chaos-throwaway-ci@127.0.0.1:5432/postgres?sslmode=disable\n' > "$GITHUB_WORKSPACE/pg.dsn"
+      - name: every scenario's configuration passes check-config on this release
+        run: >-
+          go run ./cmd/llmchaos run --all --check-config --tag ${{ matrix.tag }} --max-load 0
+          --gateway "$GITHUB_WORKSPACE/.chaos-bin/llmflow-gateway"
+          --workdir "$GITHUB_WORKSPACE/chaos-check" > "$GITHUB_WORKSPACE/check-config.txt" 2>&1
       - name: scenarios
         run: >-
           go run ./cmd/llmchaos run ${{ matrix.scenarios }}
@@ -62,5 +67,6 @@ jobs:
           path: |
             controls-verdicts.txt
             controls-table.md
+            check-config.txt
             chaos-runs/*/evidence-seed*
           retention-days: 14

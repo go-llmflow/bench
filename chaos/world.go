@@ -20,6 +20,7 @@ type Options struct {
 	WorkDir    string // durable directory of the run (never a temporary one)
 	Seed       uint64
 	PG         string // PostgreSQL DSN of the CI scenarios ("" locally)
+	Tag        string // the gateway release under test (vX.Y.Z), "" for the latest
 	DryRun     bool   // build the fakes and the configurations, run check-config, start nothing
 	Log        func(format string, a ...any)
 }
@@ -139,12 +140,16 @@ func Setup(ctx context.Context, opt Options, sc *Scenario) (*World, error) {
 	if sc.F.ModelsDownAtStart {
 		w.Up.Update(func(f *UpstreamFaults) { f.ModelsDown = true })
 	}
-	topo := Topology{UpstreamURL: w.Up.URL(), Fluids: sc.F.Fluids, Federation: sc.F.Federation, NoModelLen: sc.F.ModelsDownAtStart}
+	topo := Topology{Tag: opt.Tag, UpstreamURL: w.Up.URL(), Fluids: sc.F.Fluids, Federation: sc.F.Federation, NoModelLen: sc.F.ModelsDownAtStart}
 	if err := w.setupControlFakes(&topo); err != nil {
 		return fail(err)
 	}
 	if sc.F.Fluids {
 		w.DCGM = fakeupstream.NewDCGM("GPU-aaa", "GPU-bbb")
+		if sc.F.DCGMGlitch { // 2.6e12 mJ: 1 kW for 30 days, as in the gateway's own proof
+			w.DCGM.Preload("GPU-aaa", 2_600_000_000_000)
+			w.DCGM.Preload("GPU-bbb", 2_600_000_000_000)
+		}
 		w.dcgmSrv = httptest.NewServer(w.DCGM)
 		w.closers = append(w.closers, w.dcgmSrv.Close)
 		topo.DCGMURL = w.dcgmSrv.URL
@@ -167,11 +172,26 @@ func Setup(ctx context.Context, opt Options, sc *Scenario) (*World, error) {
 			p := NewIdP(d.name, "llmflow-"+d.name)
 			w.IdPs[d.name] = p
 			w.closers = append(w.closers, p.Close)
-			ref := IdPRef{Name: d.name, Issuer: p.Issuer(), Audience: p.Audience, Org: d.org, Team: d.team, Domain: d.domain, Legacy: d.name == "idpA" && !sc.F.SCIM} // a SCIM domain and a legacy domain cannot both be (config refuses two)
+			ref := IdPRef{Name: d.name, Issuer: p.Issuer(), Audience: p.Audience, Org: d.org, Team: d.team, Domain: d.domain, Legacy: d.name == "idpA" && !sc.F.SCIM && !sc.F.SharedSCIM} // a SCIM domain and a legacy domain cannot both be (config refuses two)
 			if d.name == "fed" {
 				ref.Accept = []string{"univ-c.example"}
 			}
 			topo.IdPs = append(topo.IdPs, ref)
+		}
+		if sc.F.SchacInst {
+			c, d := "univ-c.example", "univ-d.example"
+			for _, r := range []IdPRef{
+				{Name: "instA", Accept: []string{c, d}},
+				{Name: "instB", Accept: []string{c, d}, AcceptClaim: "schacHomeOrganization"},
+				{Name: "instC", Domains: []string{c, d}},
+			} {
+				p := NewIdP(r.Name, "llmflow-"+r.Name)
+				w.IdPs[r.Name] = p
+				w.closers = append(w.closers, p.Close)
+				r.Issuer, r.Audience, r.Org, r.Team = p.Issuer(), p.Audience, Borrower, TeamOf[Borrower]
+				r.MapClaim, r.MapValue = "schac_home_organization", c
+				topo.IdPs = append(topo.IdPs, r)
+			}
 		}
 	}
 	nrep := max(1, sc.Replicas)
@@ -277,6 +297,16 @@ func (w *World) provision() error {
 			c := Client{Org: d.org, Team: TeamOf[d.org], IdP: d.idp, Prefix: prefix(d.org), Who: "jwt:" + d.idp + ":" + d.sub}
 			c.Scoped = d.sub + "@" + map[string]string{"idpA": "a.example", "idpB": "b.example", "fed": "univ-c.example"}[d.idp]
 			w.Clients = append(w.Clients, c)
+		}
+	}
+	if w.Sc.F.SpoolFair {
+		// generous budgets on the two organisations that share the spool: a
+		// budgeted request is what the spool's fairness refuses
+		for _, org := range []string{"etabA", "etabB"} {
+			w.Budgets = append(w.Budgets, BudgetSpec{"org", org, "day", 1e6, 5e5})
+			if err := g.SetBudget("org", org, "day", 1e6, 5e5); err != nil {
+				return err
+			}
 		}
 	}
 	if !w.Sc.F.Budgets {

@@ -166,3 +166,68 @@ func TestRequestIdsOfWorkersNeverMeet(t *testing.T) {
 		}
 	}
 }
+
+func TestNAdmissionJudge(t *testing.T) {
+	mk := func(admitted, refused int) *World {
+		w := adminFake(t, nil, nil)
+		w.Sc = &Scenario{Name: "t", Expect: []string{"n-admission"}}
+		id := 0
+		for i := 0; i < admitted; i++ {
+			id++
+			w.Ledger.Add(Outcome{Req: Req{ID: id, Org: Borrower, Who: "key:kA"}, Status: 200})
+		}
+		for i := 0; i < refused; i++ {
+			id++
+			w.Ledger.Add(Outcome{Req: Req{ID: id, Org: Borrower, Who: "key:kA"}, Status: 429})
+		}
+		return w
+	}
+	if p, _ := mk(1, 100).nAdmissionProbe(); len(p) != 0 {
+		t.Fatalf("a gateway that refuses n=4 with 3 free: %v", p)
+	}
+	if p, _ := mk(100, 0).nAdmissionProbe(); !has(p, "proves nothing") {
+		t.Fatalf("an uncontended pool: %v", p)
+	}
+	if p, _ := mk(60, 40).nAdmissionProbe(); !has(p, "must hold n slots") {
+		t.Fatalf("a gateway that admits n=4 with 3 free passed: %v", p)
+	}
+}
+
+func TestSpoolFairJudge(t *testing.T) {
+	mk := func(bServed, aRefused int) *World {
+		w := adminFake(t, nil, nil)
+		w.Sc = &Scenario{Name: "t", Expect: []string{"spool-fair"}}
+		id := 0
+		add := func(org string, status int, body string) {
+			id++
+			w.Ledger.Add(Outcome{Req: Req{ID: id, Org: org}, Status: status, Body: body})
+		}
+		for i := 0; i < bServed; i++ {
+			add("etabB", 200, "")
+		}
+		for i := 0; i < aRefused; i++ {
+			add("etabA", 503, `{"error":{"message":"accounting spool: organisation share (spool_org_share)"}}`)
+		}
+		return w
+	}
+	if p, _ := mk(100, 50).spoolFairProbe(); len(p) != 0 {
+		t.Fatalf("a fair spool: %v", p)
+	}
+	if p, _ := mk(5, 50).spoolFairProbe(); !has(p, "stopped serving the other") {
+		t.Fatalf("the others starved: %v", p)
+	}
+	if p, _ := mk(100, 0).spoolFairProbe(); !has(p, "never refused") {
+		t.Fatalf("a flooder never refused: %v", p)
+	}
+}
+
+func TestTagAtLeast(t *testing.T) {
+	for _, c := range []struct {
+		tag, min string
+		want     bool
+	}{{"v0.38.1", "v0.39.0", false}, {"v0.39.0", "v0.39.0", true}, {"v0.40.0", "v0.39.0", true}, {"", "v0.39.0", true}, {"v0.9.9", "v0.39.0", false}} {
+		if got := TagAtLeast(c.tag, c.min); got != c.want {
+			t.Errorf("TagAtLeast(%q, %q) = %v", c.tag, c.min, got)
+		}
+	}
+}

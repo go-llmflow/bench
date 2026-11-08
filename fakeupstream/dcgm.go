@@ -15,11 +15,12 @@ import (
 // The test moves the counters (Add), reloads a driver (Reset) and takes the
 // exporter down (SetDown) to check what a gateway's fluids accounting does.
 type DCGM struct {
-	mu    sync.Mutex
-	mj    map[string]uint64
-	down  bool
-	hits  atomic.Int64
-	added uint64 // everything Add put in, for the test's arithmetic
+	mu     sync.Mutex
+	mj     map[string]uint64
+	down   bool
+	hits   atomic.Int64
+	added  uint64 // everything Add put in, for the test's arithmetic
+	glitch map[string]bool
 }
 
 // NewDCGM returns an exporter with the given GPU UUIDs, counters at 0.
@@ -80,10 +81,34 @@ func (d *DCGM) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 	fmt.Fprint(w, "# HELP DCGM_FI_DEV_TOTAL_ENERGY_CONSUMPTION Total energy consumption since boot (in mJ).\n# TYPE DCGM_FI_DEV_TOTAL_ENERGY_CONSUMPTION counter\n")
 	for i, g := range gpus {
-		fmt.Fprintf(w, "DCGM_FI_DEV_TOTAL_ENERGY_CONSUMPTION{gpu=\"%d\",UUID=%q,device=\"nvidia%d\",Hostname=\"fake\"} %d\n", i, g, i, d.mj[g])
+		v := d.mj[g]
+		if d.glitch[g] {
+			v = 0
+			delete(d.glitch, g)
+		}
+		fmt.Fprintf(w, "DCGM_FI_DEV_TOTAL_ENERGY_CONSUMPTION{gpu=\"%d\",UUID=%q,device=\"nvidia%d\",Hostname=\"fake\"} %d\n", i, g, i, v)
 	}
 	fmt.Fprint(w, "# HELP DCGM_FI_DEV_POWER_USAGE Power draw (in W).\n# TYPE DCGM_FI_DEV_POWER_USAGE gauge\n")
 	for i, g := range gpus {
 		fmt.Fprintf(w, "DCGM_FI_DEV_POWER_USAGE{gpu=\"%d\",UUID=%q} 300.5\n", i, g)
 	}
+}
+
+// Preload sets a GPU's counter to a lifetime value that the test's arithmetic
+// (Added) does not count: a GPU that has been up for a month.
+func (d *DCGM) Preload(gpu string, mj uint64) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.mj[gpu] = mj
+}
+
+// GlitchOnce makes the next scrape read 0 for the GPU, whatever its counter
+// is, and the ones after read it again: a glitching exporter, not a reload.
+func (d *DCGM) GlitchOnce(gpu string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.glitch == nil {
+		d.glitch = map[string]bool{}
+	}
+	d.glitch[gpu] = true
 }

@@ -164,3 +164,19 @@ func (r Result) HasFail() bool {
 	}
 	return false
 }
+
+// TagAtLeast reports whether release tag is min or later; an empty or
+// unparsable tag is taken as the latest release.
+func TagAtLeast(tag, min string) bool {
+	a, ok1 := semver(tag)
+	b, ok2 := semver(min)
+	if !ok1 || !ok2 {
+		return true
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return a[i] > b[i]
+		}
+	}
+	return true
+}

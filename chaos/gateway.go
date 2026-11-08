@@ -64,6 +64,13 @@ type Topology struct {
 	NoModelLen  bool // leave max_model_len out: learnt from /v1/models
 	// Extra HCL appended verbatim (a scenario's own settings).
 	Extra string
+	// Tag is the gateway release under test ("" : the latest): a configuration
+	// key that a release does not know is left out for it (OrgDomains).
+	Tag string
+	// OrgDomains: the domains an organisation owns (org { domains }, v0.39.0).
+	OrgDomains map[string][]string
+	// StoreExtra is HCL inside the store block (PostgreSQL only).
+	StoreExtra string
 	// ModelExtra is HCL inside the main model's block (fallbacks, say).
 	ModelExtra string
 	// PoolExtra is HCL inside the main pool's block (per-pool shares, say).
@@ -86,6 +93,11 @@ type HAPeer struct {
 type IdPRef struct {
 	Name, Issuer, Audience, Org, Team, Domain string
 	Accept                                    []string // schac_home_organization values (federation issuer)
+	// AcceptClaim: the claim accept names (default schac_home_organization);
+	// MapClaim/MapValue: a map on another claim (default: groups = users);
+	// Domains: several domains.
+	AcceptClaim, MapClaim, MapValue string
+	Domains                         []string
 	// Legacy: the issuer's unscoped names are this domain's (only one issuer may).
 	Legacy bool
 }
@@ -189,7 +201,7 @@ func (g *Gateway) config() string {
 	p("listen = %q\nmaster_key_file = %q\ncache_isolation = \"org\"\ncache_salt_key_file = %q\nauth_failures_per_minute = 0\nshutdown_grace = \"2s\"\nbudget_refresh = \"1s\"\n",
 		g.Listen, filepath.Join(g.Dir, "master.key"), filepath.Join(g.Dir, "salt.key"))
 	if t.PG != "" {
-		p("store {\n  kind = \"postgres\"\n  dsn_file = %q\n  fail_closed = true\n  spool_dir = %q\n}\n", filepath.Join(g.Dir, "pg.dsn"), filepath.Join(g.Dir, "spool"))
+		p("store {\n  kind = \"postgres\"\n  dsn_file = %q\n  fail_closed = true\n  spool_dir = %q\n%s}\n", filepath.Join(g.Dir, "pg.dsn"), filepath.Join(g.Dir, "spool"), t.StoreExtra)
 	} else {
 		p("store {\n  kind = \"memory\"\n}\n")
 	}
@@ -204,7 +216,11 @@ func (g *Gateway) config() string {
 	p("limits {\n  upstream_header_timeout = \"6s\"\n}\n")
 	p("budgets {\n  grant_idle = \"1s\"\n}\n")
 	for _, o := range Owners {
-		p("org %q {\n  share = %v\n  team %q {}\n}\n", o, OwnerShares[o], TeamOf[o])
+		dom := ""
+		if d := t.OrgDomains[o]; len(d) > 0 && TagAtLeast(t.Tag, "v0.39.0") { // org { domains } exists from v0.39.0
+			dom = fmt.Sprintf("  domains = [%s]\n", quoteList(d))
+		}
+		p("org %q {\n  share = %v\n%s  team %q {}\n}\n", o, OwnerShares[o], dom, TeamOf[o])
 	}
 	p("org %q {\n  share = 0\n  team %q {}\n  billing {\n    markup = 0.15\n  }\n}\n", Borrower, TeamOf[Borrower])
 	p("pool \"gpu\" {\n  capacity = %d\n  borrow = \"spare\"\n%s}\n", PoolCapacity, t.PoolExtra)
@@ -263,10 +279,21 @@ func (g *Gateway) config() string {
 		case i.Domain != "":
 			p("  domains = [%q]\n", i.Domain)
 		}
-		if len(i.Accept) > 0 {
-			p("  accept {\n    claim = \"schac_home_organization\"\n    values = [%s]\n  }\n", quoteList(i.Accept))
+		if len(i.Domains) > 0 {
+			p("  domains = [%s]\n", quoteList(i.Domains))
 		}
-		p("  clock_skew = \"5m\"\n  min_refresh = \"5s\"\n  map {\n    claim = \"groups\"\n    value = \"users\"\n    team = %q\n  }\n}\n", i.Team)
+		if len(i.Accept) > 0 {
+			claim := i.AcceptClaim
+			if claim == "" {
+				claim = "schac_home_organization"
+			}
+			p("  accept {\n    claim = %q\n    values = [%s]\n  }\n", claim, quoteList(i.Accept))
+		}
+		mc, mv := "groups", "users"
+		if i.MapClaim != "" {
+			mc, mv = i.MapClaim, i.MapValue
+		}
+		p("  clock_skew = \"5m\"\n  min_refresh = \"5s\"\n  map {\n    claim = %q\n    value = %q\n    team = %q\n  }\n}\n", mc, mv, i.Team)
 	}
 	if t.Federation {
 		p("federation \"ilaas\" {\n  prefix = %q\n  org = %q\n  metrics_networks = [\"127.0.0.0/8\"]\n}\n", FedPrefix, Borrower)

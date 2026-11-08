@@ -45,3 +45,23 @@ func TestDCGM(t *testing.T) {
 		t.Fatalf("%d hits %d", code, d.Hits())
 	}
 }
+
+func TestDCGMGlitchOnceReadsZeroOnceAndPreloadIsNotAdded(t *testing.T) {
+	d := NewDCGM("GPU-a")
+	d.Preload("GPU-a", 5_000)
+	srv := httptest.NewServer(d)
+	defer srv.Close()
+	if _, b := scrape(t, srv.URL+"/metrics"); !strings.Contains(b, "} 5000\n") {
+		t.Fatalf("preloaded counter not served:\n%s", b)
+	}
+	d.GlitchOnce("GPU-a")
+	if _, b := scrape(t, srv.URL+"/metrics"); !strings.Contains(b, "Hostname=\"fake\"} 0\n") {
+		t.Fatalf("the glitch did not read 0:\n%s", b)
+	}
+	if _, b := scrape(t, srv.URL+"/metrics"); !strings.Contains(b, "} 5000\n") {
+		t.Fatalf("the glitch lasted more than one scrape:\n%s", b)
+	}
+	if d.Added() != 0 {
+		t.Fatalf("Added counts the preload: %d", d.Added())
+	}
+}

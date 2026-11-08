@@ -30,7 +30,7 @@ func (s *Scenario) expects(name string) bool {
 
 // controlProbes runs the probes of the scenario's controls.
 func (w *World) controlProbes() (problems, notes []string) {
-	for _, f := range []func() ([]string, []string){w.schacSpoofProbe, w.nSlotsProbe, w.adminUsersProbe, w.spareGuardProbe, w.fallbackSpareProbe, w.floodProbe, w.schacChangeProbe, w.longRunProbe} {
+	for _, f := range []func() ([]string, []string){w.schacSpoofProbe, w.nSlotsProbe, w.nAdmissionProbe, w.adminUsersProbe, w.spareGuardProbe, w.fallbackSpareProbe, w.floodProbe, w.schacChangeProbe, w.longRunProbe, w.schacInstitutionProbe, w.sharedScimProbe, w.spoolFairProbe} {
 		p, n := f()
 		problems, notes = append(problems, p...), append(notes, n...)
 	}
@@ -235,6 +235,7 @@ func (g *fakeGuard) Calls() []guardCall {
 // setupControlFakes starts the fakes a scenario's features ask for and adds
 // their configuration to the topology.
 func (w *World) setupControlFakes(topo *Topology) error {
+	w.setupControl39(topo)
 	if w.Sc.F.UpstreamNet {
 		px, err := NewProxy(strings.TrimPrefix(w.Up.URL(), "http://"))
 		if err != nil {
@@ -478,4 +479,43 @@ func (w *World) scimAfterSquat(create func(string) int) (problems []string) {
 		problems = append(problems, fmt.Sprintf("admin-users: after the squat attempt, %s has no member role on %s: %.200s", carol, TeamOf["etabA"], b))
 	}
 	return problems
+}
+
+// ---- control n-admission: gateway v0.39.0, "n and best_of weigh on scheduling" ----
+
+// nAdmissionProbe: the owners keep 5 of the pool's 8 slots busy; the spare-only
+// borrower asks n = best_of = 4. A request that runs n sequences holds n slots
+// (v0.39.0) and a spare-only borrower needs room for all of them: with 3 free it
+// is refused 429 whole. v0.38.1 counted one slot and admitted it. The upstream's
+// concurrency must also stay within the pool.
+func (w *World) nAdmissionProbe() (problems, notes []string) {
+	if !w.Sc.expects("n-admission") {
+		return nil, nil
+	}
+	var attempts, admitted, refused int
+	for _, o := range w.Ledger.All() {
+		if o.Org != Borrower || o.Left || o.Status == 0 {
+			continue
+		}
+		attempts++
+		switch o.Status {
+		case 200:
+			admitted++
+		case 429:
+			refused++
+		}
+	}
+	switch {
+	case refused < 20:
+		problems = append(problems, fmt.Sprintf("n-admission: only %d borrower requests were refused of %d: the pool was not contended, the probe proves nothing", refused, attempts))
+	case admitted*20 > attempts:
+		problems = append(problems, fmt.Sprintf("n-admission: %d of %d n=4 borrower requests were admitted with only 3 slots free (at most 5 %% by a free slot in passing): a request of n sequences must hold n slots", admitted, attempts))
+	}
+	if m := w.Up.MaxInFlight(); m > PoolCapacity {
+		problems = append(problems, fmt.Sprintf("n-admission: %d requests were in flight at the upstream, above the pool of %d", m, PoolCapacity))
+	}
+	if len(problems) == 0 {
+		notes = append(notes, fmt.Sprintf("n-admission: %d of %d n=4 borrower requests admitted, %d refused 429, upstream peak %d of %d", admitted, attempts, refused, w.Up.MaxInFlight(), PoolCapacity))
+	}
+	return
 }
