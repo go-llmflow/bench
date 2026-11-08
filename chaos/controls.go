@@ -281,11 +281,16 @@ model "fake-small" {
   fallbacks = [%q]
   fallback_on = ["unavailable", "saturated"]
   saturation_waiting = 2
+  cost {
+    input_per_mtok = %v
+    output_per_mtok = %v
+    cached_per_mtok = %v
+  }
   upstream "n2" {
     base_url = %q
   }
 }
-`, MaxModelLen, ModelName, w.Small.URL())
+`, MaxModelLen, ModelName, PriceIn, PriceOut, PriceCached, w.Small.URL())
 	}
 	return nil
 }
