@@ -379,12 +379,17 @@ func (g *Gateway) Log() string { return g.log.String() }
 
 // Admin is a call to the admin API with the master key.
 func (g *Gateway) Admin(method, path, body string) (int, []byte, error) {
+	return g.AdminAs(g.Master, method, path, body)
+}
+
+// AdminAs is a call to the admin API with the given bearer (a user's admin token).
+func (g *Gateway) AdminAs(bearer, method, path, body string) (int, []byte, error) {
 	req, err := http.NewRequest(method, g.URL+path, strings.NewReader(body))
 	if err != nil {
 		return 0, nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+g.Master)
+	req.Header.Set("Authorization", "Bearer "+bearer)
 	resp, err := adminClient.Do(req)
 	if err != nil {
 		return 0, nil, err

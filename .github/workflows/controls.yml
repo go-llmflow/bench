@@ -28,7 +28,7 @@ jobs:
         run: GOBIN="$GITHUB_WORKSPACE/.chaos-bin" go install "github.com/go-llmflow/gateway/cmd/llmflow-gateway@${{ matrix.tag }}"
       - name: controls
         run: >-
-          go run ./cmd/llmchaos run idp-schac-spoof control-n-slots --tag ${{ matrix.tag }} --strict --seed 1 --seed 2 --max-load 0
+          go run ./cmd/llmchaos run idp-schac-spoof control-n-slots control-admin-users --tag ${{ matrix.tag }} --strict --seed 1 --seed 2 --max-load 0
           --gateway "$GITHUB_WORKSPACE/.chaos-bin/llmflow-gateway"
           --workdir "$GITHUB_WORKSPACE/chaos-runs"
           --table "$GITHUB_WORKSPACE/controls-table.md" > "$GITHUB_WORKSPACE/controls-verdicts.txt" 2>&1

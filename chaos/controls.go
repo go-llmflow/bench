@@ -23,7 +23,7 @@ func (s *Scenario) expects(name string) bool {
 
 // controlProbes runs the probes of the scenario's controls.
 func (w *World) controlProbes() (problems, notes []string) {
-	for _, f := range []func() ([]string, []string){w.schacSpoofProbe, w.nSlotsProbe} {
+	for _, f := range []func() ([]string, []string){w.schacSpoofProbe, w.nSlotsProbe, w.adminUsersProbe} {
 		p, n := f()
 		problems, notes = append(problems, p...), append(notes, n...)
 	}
@@ -105,6 +105,68 @@ func (w *World) nSlotsProbe() (problems, notes []string) {
 		problems = append(problems, fmt.Sprintf("n-slots: in %d of %d samples the estimate of an n=4 request in flight was %.0f tokens, below 4 x max_tokens = %d: the choices are not counted in the borrower's share", low, seen, worst, want))
 	default:
 		notes = append(notes, fmt.Sprintf("n-slots: %d samples, every n=4 request counted at least %d tokens in flight", seen, want))
+	}
+	return
+}
+
+// ---- control admin-users: gateway v0.38.0, "POST /admin/users is bound to the institutions" ----
+
+// adminUsersProbe: the org administrator of etabB (whose provider idpB has the
+// domain b.example) creates users through POST /admin/users.
+//
+//   - a bare name ("mallory") must be refused 400: once a domain is configured a
+//     name is local@domain, and a bare stored user stops the next Start (v0.37.1
+//     created it, 201);
+//   - a name in another institution's domain ("carol@a.example", idpA's) must be
+//     refused 400: v0.37.1 let any org admin pre-create another institution's
+//     person, who its SCIM never managed and its restricted SSO refused;
+//   - the control: a name in its own domain ("dora@b.example") is created, 201,
+//     so the probe cannot pass by refusing everything;
+//   - the gateway must restart on that store.
+func (w *World) adminUsersProbe() (problems, notes []string) {
+	if !w.Sc.expects("admin-users") {
+		return nil, nil
+	}
+	g := w.Primary()
+	const admin = "adminb@b.example"
+	if code, b, err := g.Admin("POST", "/admin/users", `{"name":"`+admin+`"}`); err != nil || (code != 201 && code != 409) {
+		return []string{fmt.Sprintf("admin-users: cannot create %s: %d %v %s", admin, code, err, b)}, nil
+	}
+	if code, b, err := g.Admin("PUT", "/admin/users/"+admin+"/roles", `{"role":"org_admin","org":"etabB"}`); err != nil || code != 200 {
+		return []string{fmt.Sprintf("admin-users: cannot grant org_admin: %d %v %s", code, err, b)}, nil
+	}
+	code, b, err := g.Admin("POST", "/admin/users/"+admin+"/tokens", "")
+	if err != nil || code != 201 {
+		return []string{fmt.Sprintf("admin-users: no admin token: %d %v %s", code, err, b)}, nil
+	}
+	i := strings.Index(string(b), "llma-")
+	if i < 0 {
+		return []string{"admin-users: no llma- token in " + string(b)}, nil
+	}
+	tok := string(b)[i:]
+	if j := strings.IndexAny(tok, `"`); j > 0 {
+		tok = tok[:j]
+	}
+	create := func(name string) int {
+		c, _, _ := g.AdminAs(tok, "POST", "/admin/users", `{"name":"`+name+`"}`)
+		return c
+	}
+	if c := create("dora@b.example"); c != 201 {
+		return []string{fmt.Sprintf("admin-users control: the org admin of etabB creating dora@b.example (its own domain) got %d (want 201): the probe proves nothing", c)}, nil
+	}
+	if c := create("mallory"); c != 400 {
+		problems = append(problems, fmt.Sprintf("admin-users: an org admin creating the bare name mallory got %d (want 400: a name is local@domain once a domain is configured)", c))
+	}
+	if c := create("carol@a.example"); c != 400 {
+		problems = append(problems, fmt.Sprintf("admin-users: the org admin of etabB creating carol@a.example, in idpA's domain, got %d (want 400: only the domains of its own institutions)", c))
+	}
+	if err := g.Stop(); err != nil {
+		problems = append(problems, fmt.Sprintf("admin-users: stop: %v", err))
+	} else if err := g.Start(40 * time.Second); err != nil {
+		problems = append(problems, fmt.Sprintf("admin-users: the gateway does not restart on the stored users: %.300v", err))
+	}
+	if len(problems) == 0 {
+		notes = append(notes, "admin-users: bare and foreign-domain creations refused 400, own domain 201, the gateway restarted")
 	}
 	return
 }
