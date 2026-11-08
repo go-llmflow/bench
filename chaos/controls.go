@@ -267,7 +267,7 @@ guardrail "lg" {
 		topo.PoolExtra = fmt.Sprintf("  shares = { etabA = 0.45, etabB = 0.3, etabC = 0.2, %s = 0.05 }\n", Borrower)
 		topo.ModelExtra = "  fallbacks = [\"fake-small\"]\n  fallback_on = [\"unavailable\", \"saturated\"]\n  saturation_waiting = 2\n"
 		topo.Extra += fmt.Sprintf(`pool "small" {
-  capacity = 2
+  capacity = 64
   shares = { etabA = 1 }
   borrow = "spare"
 }
