@@ -196,31 +196,35 @@ func TestNAdmissionJudge(t *testing.T) {
 func TestSpoolFairJudge(t *testing.T) {
 	from := time.Now()
 	to := from.Add(10 * time.Second)
-	mk := func(bServed, bRefused, aRefused int) []Outcome {
+	mk := func(bServed, bFailClosed, bSpool, aSpool int) []Outcome {
 		at := from.Add(5 * time.Second)
 		var out []Outcome
 		for i := 0; i < bServed; i++ {
 			out = append(out, Outcome{Req: Req{Org: "etabB"}, Status: 200, At: at})
 		}
-		for i := 0; i < bRefused; i++ {
-			out = append(out, Outcome{Req: Req{Org: "etabB"}, Status: 503, At: at})
+		for i := 0; i < bFailClosed; i++ {
+			out = append(out, Outcome{Req: Req{Org: "etabB"}, Status: 503, Body: "accounting store unreachable; requests are refused (fail-closed)", At: at})
 		}
-		for i := 0; i < aRefused; i++ {
-			out = append(out, Outcome{Req: Req{Org: "etabA"}, Status: 503, At: at})
+		for i := 0; i < bSpool; i++ {
+			out = append(out, Outcome{Req: Req{Org: "etabB"}, Status: 503, Body: "the accounting spool is full or unwritable", At: at})
+		}
+		for i := 0; i < aSpool; i++ {
+			out = append(out, Outcome{Req: Req{Org: "etabA"}, Status: 503, Body: "this organisation's usage records are filling the accounting spool", At: at})
 		}
 		return out
 	}
-	if p, _ := spoolFairProblems(mk(100, 5, 50), from, to); len(p) != 0 {
+	// v0.39.0: the innocent is served or failed closed with the store, never refused for the spool
+	if p, _ := spoolFairProblems(mk(10, 90, 0, 50), from, to); len(p) != 0 {
 		t.Fatalf("a fair spool: %v", p)
 	}
-	// planted: the innocent is refused with the flooder (v0.38.1: every budgeted request)
-	if p, _ := spoolFairProblems(mk(10, 90, 50), from, to); !has(p, "filled it for everyone") {
-		t.Fatalf("the innocent refused passed: %v", p)
+	// planted (v0.38.1): the innocent refused for the spool with the flooder
+	if p, _ := spoolFairProblems(mk(0, 0, 90, 50), from, to); !has(p, "filled it for everyone") {
+		t.Fatalf("the innocent refused for the spool passed: %v", p)
 	}
-	if p, _ := spoolFairProblems(mk(100, 0, 0), from, to); !has(p, "never refused") {
+	if p, _ := spoolFairProblems(mk(100, 0, 0, 0), from, to); !has(p, "never refused") {
 		t.Fatalf("a flooder never refused: %v", p)
 	}
-	if p, _ := spoolFairProblems(mk(3, 0, 50), from, to); !has(p, "proves nothing") {
+	if p, _ := spoolFairProblems(mk(3, 0, 0, 50), from, to); !has(p, "proves nothing") {
 		t.Fatalf("too few requests: %v", p)
 	}
 }
