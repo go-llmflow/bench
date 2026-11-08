@@ -345,7 +345,8 @@ func init() {
 	faultTable["admin-flood"] = func(w *World, f FaultAt) (func(), error) {
 		stop := make(chan struct{})
 		wg := goFlood(int(f.Arg), stop, func() {
-			for _, p := range []string{"/admin/spend?group_by=org,team,key", "/admin/budgets"} {
+			from, to := window()
+			for _, p := range []string{"/admin/spend?group_by=org,team,key&from=" + from + "&to=" + to, "/admin/budgets"} {
 				t0 := time.Now()
 				code, _, err := w.Primary().Admin("GET", p, "")
 				if err != nil {

@@ -167,7 +167,7 @@ func Setup(ctx context.Context, opt Options, sc *Scenario) (*World, error) {
 			p := NewIdP(d.name, "llmflow-"+d.name)
 			w.IdPs[d.name] = p
 			w.closers = append(w.closers, p.Close)
-			ref := IdPRef{Name: d.name, Issuer: p.Issuer(), Audience: p.Audience, Org: d.org, Team: d.team, Domain: d.domain, Legacy: d.name == "idpA"}
+			ref := IdPRef{Name: d.name, Issuer: p.Issuer(), Audience: p.Audience, Org: d.org, Team: d.team, Domain: d.domain, Legacy: d.name == "idpA" && !sc.F.SCIM} // a SCIM domain and a legacy domain cannot both be (config refuses two)
 			if d.name == "fed" {
 				ref.Accept = []string{"univ-c.example"}
 			}

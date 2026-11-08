@@ -69,6 +69,6 @@ func round2() []*Scenario {
 			[]Burst{{At: s(7), Org: "etabA", N: 24, Edge: true, Tokens: 32}, {At: s(12), Org: "etabA", N: 24, Edge: true, Tokens: 32}}),
 		with(Scenario{Name: "combined-schac-change-and-key-rotation", Doc: "the federation IdP changes its schac and rotates its key in the same minute",
 			F: full(), Duration: s(16), Load: steady(),
-			Faults: []FaultAt{{Kind: "idp-rotate", Target: "fed", At: s(5), Arg: 0}, {Kind: "idp-schac-change", At: s(8)}}, Expect: []string{"schac-change"}}),
+			Faults: []FaultAt{{Kind: "idp-rotate", Target: "idpA", At: s(3), Arg: 1}, {Kind: "idp-schac-change", At: s(8)}}, Expect: []string{"schac-change"}}),
 	}
 }

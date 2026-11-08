@@ -193,6 +193,7 @@ func runCmd() *cobra.Command {
 		table, resultsFile, tag  string
 		maxLoad                  float64
 		loadWait                 time.Duration
+		duration                 time.Duration
 	)
 	cmd := &cobra.Command{
 		Use:   "run [scenario...]",
@@ -256,6 +257,11 @@ environment) and are skipped, and said so, without it.`,
 			failed := 0
 			var all []chaos.Result
 			for _, sc := range scs {
+				if duration > 0 { // a shortened run (a smoke test of a long scenario), never the campaign
+					c := *sc
+					c.Duration = duration
+					sc = &c
+				}
 				for _, seed := range seeds {
 					opt := chaos.Options{GatewayBin: gateway, WorkDir: workdir, Seed: uint64(seed), PG: pg, DryRun: dry,
 						Log: func(f string, a ...any) { fmt.Fprintf(cmd.ErrOrStderr(), "  "+f+"\n", a...) }}
@@ -318,6 +324,7 @@ environment) and are skipped, and said so, without it.`,
 	f.StringVar(&resultsFile, "results", "", "write the results as JSON to this file (input of: llmchaos merge)")
 	f.BoolVar(&dry, "check-config", false, "only generate every scenario's configuration and run the gateway's check-config on it; start nothing")
 	f.Float64Var(&maxLoad, "max-load", 8, "defer while the 1-minute load average is above this (0: no gate)")
+	f.DurationVar(&duration, "duration", 0, "run the scenarios for this long instead of their own duration (a smoke test; the campaign never sets it)")
 	f.DurationVar(&loadWait, "load-wait", 10*time.Minute, "how long to wait for the load to fall before giving up")
 	return cmd
 }

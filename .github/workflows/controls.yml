@@ -18,8 +18,9 @@ jobs:
       fail-fast: false
       matrix:
         tag: [v0.38.0, v0.38.1]
-        set: [controls, hostile-net, pg]
+        set: [controls, hostile-net, pg, long-smoke]
         include:
+          - { set: long-smoke, scenarios: 'long-mixed-traffic --duration 4m' }
           - { set: controls, scenarios: 'idp-schac-spoof control-n-slots control-admin-users control-spare-guard control-fallback-spare control-recorder-stall' }
           - { set: hostile-net, scenarios: 'hostile-borrower-flood hostile-admin-flood hostile-fed-metrics-hammer combined-hostile-tenants idp-schac-change net-upstream-latency net-upstream-loss combined-net-loss-idp-down-disconnects combined-schac-change-and-key-rotation' }
           - { set: pg, scenarios: 'net-replica-link-slow ha-budget-edge migrate-users-ha combined-saturation-pg-hang-replica-kill combined-partition-kill-budget-edge combined-month-close-bmc-reset-pg-slow' }

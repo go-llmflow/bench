@@ -121,3 +121,27 @@ func TestDriftJudge(t *testing.T) {
 		t.Fatalf("empty windows: %v", p)
 	}
 }
+
+// A request the gateway answered 5xx without the upstream ever receiving it
+// may be counted (the link was cut), at no cost; a 200 never received may not.
+func TestInvariant2AllowsTheCountOfA5xxThatNeverReachedTheUpstream(t *testing.T) {
+	cost := Cost(6, 10)
+	row := func(n int64) []SpendRow {
+		return []SpendRow{{Org: "etabA", Team: "a1", Key: "kA", Requests: n, Cost: cost}}
+	}
+	mk := func(rows []SpendRow, status int) *World {
+		w := adminFake(t, rows, nil)
+		cleanReq(w, "key:kA", "etabA", 1, 6, 10)
+		w.Ledger.Add(Outcome{Req: Req{ID: 2, Org: "etabA", Who: "key:kA", Marker: "MKetabA-s1-2", MaxTokens: 32}, Status: status, BodyLen: 5})
+		return w
+	}
+	if w := mk(row(2), 502); inv2(w, newJoin(w)).Status != Pass {
+		t.Fatal("a counted 502 that never reached the upstream fails")
+	}
+	if w := mk(row(2), 200); inv2(w, newJoin(w)).Status != Fail {
+		t.Fatal("a counted 200 that never reached the upstream passed")
+	}
+	if w := mk(row(3), 502); inv2(w, newJoin(w)).Status != Fail {
+		t.Fatal("a count beyond clean + the 502 passed")
+	}
+}
