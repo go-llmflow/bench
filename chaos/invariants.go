@@ -131,6 +131,11 @@ func newJoin(w *World) *join {
 	for _, s := range w.Up.Seen() {
 		hits[s.Marker] = append(hits[s.Marker], s)
 	}
+	if w.Small != nil { // the fallback model's upstream witnesses the requests moved to it
+		for _, s := range w.Small.Seen() {
+			hits[s.Marker] = append(hits[s.Marker], s)
+		}
+	}
 	j := &join{ByOrg: map[string][]*jreq{}}
 	for _, o := range w.Ledger.All() {
 		r := &jreq{Outcome: o, Hits: hits[o.Marker], Fate: FateNone}
