@@ -190,7 +190,7 @@ func Run(ctx context.Context, opt Options, sc *Scenario) (res Result) {
 				}
 				for n := 0; time.Now().Before(loadEnd) && runCtx.Err() == nil; n++ {
 					c := clients[(k+n)%len(clients)]
-					req := w.newReq(r, ld, c, (oi+1)*1_000_000+k*10_000+n*10)
+					req := w.newReq(r, ld, c, (oi+1)*100_000_000+k*1_000_000+n*10) // n < 100000: the ids of two workers never meet (they met after 1000 requests of one worker, so a long run joined requests to the wrong upstream witnesses)
 					w.runWithRetries(runCtx, hc, ld, req, r)
 					if ld.Think > 0 {
 						select {

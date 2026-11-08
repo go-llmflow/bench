@@ -1,6 +1,7 @@
 package chaos
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -143,5 +144,25 @@ func TestInvariant2AllowsTheCountOfA5xxThatNeverReachedTheUpstream(t *testing.T)
 	}
 	if w := mk(row(3), 502); inv2(w, newJoin(w)).Status != Fail {
 		t.Fatal("a count beyond clean + the 502 passed")
+	}
+}
+
+// The marker of a request is its identity in the join with the upstream's
+// witnesses: two workers of one organisation must never produce the same one,
+// however long the run (the ids met after 1000 requests of a worker, which
+// corrupted every long run's invariant 2).
+func TestRequestIdsOfWorkersNeverMeet(t *testing.T) {
+	seen := map[int]string{}
+	for oi := 0; oi < 4; oi++ {
+		for k := 0; k < 99; k++ {
+			for n := 0; n < 99_999; n += 97 { // a sample of the first 100000 requests of each worker
+				id := (oi+1)*100_000_000 + k*1_000_000 + n*10
+				who := fmt.Sprint(oi, "/", k, "/", n)
+				if prev, ok := seen[id]; ok {
+					t.Fatalf("id %d of %s is also %s", id, who, prev)
+				}
+				seen[id] = who
+			}
+		}
 	}
 }
