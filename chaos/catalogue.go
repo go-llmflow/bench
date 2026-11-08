@@ -102,11 +102,14 @@ func Catalogue() []*Scenario {
 			F: Features{Fluids: true, BMC: true, DCGMGlitch: true}, Duration: s(14), Load: steady(),
 			Faults: []FaultAt{{Kind: "dcgm-glitch", At: s(5)}}, ControlSince: "v0.39.0"}),
 		with(Scenario{Name: "control-spool-fair", Doc: "POSITIVE CONTROL (v0.39.0 fix): PostgreSQL hangs, the spool is 1 MiB and one organisation floods: it is refused for the spool and the others are still served, with no answered request unbilled",
-			Needs: []string{"pg"}, Replicas: 1, F: Features{SpoolFair: true}, Duration: s(24),
+			Needs: []string{"pg"}, Replicas: 1, F: Features{SpoolFair: true}, Duration: s(30),
 			Load: map[string]OrgLoad{
-				"etabA": {Workers: 24, Tokens: []int{16}, Words: []int{8}},
+				// refused requests come back at once: a think time keeps the flood in the
+				// tens of thousands of requests, not the hundreds of thousands (which
+				// the gateway then replays for longer than the judge waits)
+				"etabA": {Workers: 12, Think: 20 * time.Millisecond, Tokens: []int{16}, Words: []int{8}},
 				"etabB": {Workers: 3, Think: 100 * time.Millisecond, Tokens: []int{16}, Words: []int{8}}},
-			Faults: []FaultAt{{Kind: "pg-hang", At: s(2), For: s(18)}},
+			Faults: []FaultAt{{Kind: "pg-hang", At: s(2), For: s(8)}},
 			Expect: []string{"spool-fair"}, ControlSince: "v0.39.0"}),
 		with(Scenario{Name: "control-n-slots", Doc: "POSITIVE CONTROL (v0.39.0 fix): the owners keep 5 of 8 slots busy, a spare-only borrower asks n = best_of = 4: a request of n sequences holds n slots and is refused when fewer are free",
 			F: Features{}, Duration: s(10), UpstreamLatency: time.Second,
