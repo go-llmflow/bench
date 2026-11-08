@@ -111,10 +111,7 @@ const killWindow = 2 * time.Second
 // the last killWindow before that replica was killed: the only requests whose
 // bill the documented behaviour may lose.
 func (w *World) inKillWindow(o Outcome) bool {
-	n := len(w.GW)
-	if n < 2 {
-		return false
-	}
+	n := max(1, len(w.GW)) // one replica too: control-recorder-stall kills the only one
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	end := o.At.Add(o.Dur)

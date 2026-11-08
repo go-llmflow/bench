@@ -260,10 +260,11 @@ guardrail "lg" {
 			lat := w.Sc.UpstreamLatency
 			w.Small.Update(func(f *UpstreamFaults) { f.Latency = lat })
 		}
-		// The borrower holds a (small) share of the main pool, so it is not
-		// spare-only there and, above it, borrows and waits; in the fallback pool
-		// it holds none: spare-only.
-		topo.PoolExtra = fmt.Sprintf("  shares = { etabA = 0.4, etabB = 0.3, etabC = 0.2, %s = 0.1 }\n", Borrower)
+		// The borrower holds a share of the main pool too small to reserve a slot
+		// (0.05 x 8 = 0.4, below the largest remainders), so it is not spare-only
+		// there, every request of it borrows and waits; in the fallback pool it
+		// holds none: spare-only.
+		topo.PoolExtra = fmt.Sprintf("  shares = { etabA = 0.45, etabB = 0.3, etabC = 0.2, %s = 0.05 }\n", Borrower)
 		topo.ModelExtra = "  fallbacks = [\"fake-small\"]\n  fallback_on = [\"unavailable\", \"saturated\"]\n  saturation_waiting = 2\n"
 		topo.Extra += fmt.Sprintf(`pool "small" {
   capacity = 2

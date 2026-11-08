@@ -81,11 +81,14 @@ func Catalogue() []*Scenario {
 			Faults: []FaultAt{{Kind: "saturate-small", At: s(2), Arg: 5}},
 			Expect: []string{"fallback-spare"}, ControlSince: "v0.38.0"}),
 		with(Scenario{Name: "control-recorder-stall", Doc: "POSITIVE CONTROL (gateway v0.38.1, #165): the store hangs (not restarts), requests are answered meanwhile, the only replica is SIGKILLed before the 10 s insert timeout and restarted: every answered request must be billed exactly once",
-			Needs: []string{"pg"}, Replicas: 1, F: Features{}, Duration: s(11),
+			Needs: []string{"pg"}, Replicas: 1, F: Features{}, Duration: s(13),
 			Load: map[string]OrgLoad{
 				"etabA": {Workers: 4, Think: 100 * time.Millisecond, Tokens: []int{16}, Words: []int{8}},
 				"etabB": {Workers: 3, Think: 100 * time.Millisecond, Tokens: []int{16}, Words: []int{8}}},
-			Faults:       []FaultAt{{Kind: "pg-hang", At: s(4), For: s(2.6)}, {Kind: "replica-kill", Target: "r0", At: s(5.5), For: s(1.5)}},
+			// the hang lasts 5.5 s, the kill falls 4.5 s into it (insert timeout: 10 s):
+			// v0.38.0 loses those 4.5 s of answers, v0.38.1 only the last second
+			// (the documented bound, allowed by the kill window).
+			Faults:       []FaultAt{{Kind: "pg-hang", At: s(3), For: s(5.5)}, {Kind: "replica-kill", Target: "r0", At: s(7.5), For: s(1.5)}},
 			ControlSince: "v0.38.1"}),
 		with(Scenario{Name: "control-n-slots", Doc: "POSITIVE CONTROL (v0.38.0 fix): requests with n = best_of = 4 must count four choices in the fair-share estimate of tokens in flight",
 			F: Features{Federation: true}, Duration: s(8), UpstreamLatency: 800 * time.Millisecond,
