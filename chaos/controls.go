@@ -256,6 +256,10 @@ guardrail "lg" {
 	if w.Sc.F.Fallback {
 		w.Small = NewUpstream(24)
 		w.closers = append(w.closers, w.Small.Close)
+		if w.Sc.UpstreamLatency > 0 {
+			lat := w.Sc.UpstreamLatency
+			w.Small.Update(func(f *UpstreamFaults) { f.Latency = lat })
+		}
 		// The borrower holds a (small) share of the main pool, so it is not
 		// spare-only there and, above it, borrows and waits; in the fallback pool
 		// it holds none: spare-only.
@@ -273,6 +277,9 @@ model "fake-small" {
   key_file = "@DIR@/upstream.key"
   max_output_tokens = 256
   max_model_len = %d
+  fallbacks = ["fake"]
+  fallback_on = ["unavailable", "saturated"]
+  saturation_waiting = 2
   upstream "n2" {
     base_url = %q
   }
