@@ -33,6 +33,18 @@ func prevMonthAt(t time.Time) (key, from, to string) {
 // closedView is what a reader sees of a month: the fluids report and the spend
 // report over it.
 func (w *World) closedView() (string, error) {
+	if w.Sc.expects("month-content") {
+		// The frozen thing is the month's SNAPSHOT (GET /admin/billing/closed). The
+		// live spend report over the month is not frozen, and in this scenario the
+		// gateway's clock is a month ahead of the time its records are stamped with
+		// (time.Now()), so real-time records keep landing in the month it closed.
+		m, _, _ := w.prevMonth()
+		code, b, err := w.Primary().Admin("GET", "/admin/billing/closed?month="+m, "")
+		if err != nil || code != 200 {
+			return "", fmt.Errorf("GET closed %s: %d %v %s", m, code, err, b)
+		}
+		return string(b), nil
+	}
 	_, from, to := w.prevMonth()
 	var out bytes.Buffer
 	for _, q := range []string{"/admin/fluids?group_by=org,pool&from=" + from + "&to=" + to, "/admin/spend?group_by=org,team&from=" + from + "&to=" + to} {
@@ -94,7 +106,14 @@ type closedMonth struct {
 // monthSpend is the total cost the spend report holds over the month that has
 // just ended.
 func (w *World) monthSpend() (float64, error) {
-	_, from, to := w.prevMonth()
+	m, from, to := w.prevMonth()
+	if w.Sc.expects("month-content") { // the snapshot's usage rows
+		code, b, err := w.Primary().Admin("GET", "/admin/billing/closed?month="+m, "")
+		if err != nil || code != 200 {
+			return 0, fmt.Errorf("the closed month %s: %d %v %s", m, code, err, b)
+		}
+		return snapshotCost(b)
+	}
 	code, b, err := w.Primary().Admin("GET", "/admin/spend?group_by=org&from="+from+"&to="+to, "")
 	if err != nil || code != 200 {
 		return 0, fmt.Errorf("spend of the closed month: %d %v %s", code, err, b)
@@ -108,6 +127,23 @@ func (w *World) monthSpend() (float64, error) {
 	var t float64
 	for _, r := range out.Rows {
 		t += r.Cost
+	}
+	return t, nil
+}
+
+// snapshotCost is the total cost of the usage rows of a closed month's snapshot.
+func snapshotCost(b []byte) (float64, error) {
+	var snap struct {
+		Usage []struct {
+			Cost float64 `json:"cost"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(b, &snap); err != nil {
+		return 0, err
+	}
+	var t float64
+	for _, u := range snap.Usage {
+		t += u.Cost
 	}
 	return t, nil
 }

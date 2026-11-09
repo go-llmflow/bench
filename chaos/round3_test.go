@@ -124,3 +124,16 @@ func TestAKnownDefectIsJudgedAndNeverHidden(t *testing.T) {
 		t.Fatal("another invariant failing is still a failure")
 	}
 }
+
+func TestSnapshotCostSumsTheUsageRows(t *testing.T) {
+	c, err := snapshotCost([]byte(`{"method":{},"cells":[],"usage":[{"org":"etabA","cost":1.5},{"org":"etabB","cost":2.25}]}`))
+	if err != nil || c != 3.75 {
+		t.Fatalf("%v %v", c, err)
+	}
+	if c, _ := snapshotCost([]byte(`{"usage":[]}`)); c != 0 {
+		t.Fatalf("an empty snapshot costs %v", c)
+	}
+	if _, err := snapshotCost([]byte(`not json`)); err == nil {
+		t.Fatal("garbage is an error")
+	}
+}
