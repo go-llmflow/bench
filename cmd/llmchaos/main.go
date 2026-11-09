@@ -276,6 +276,20 @@ environment) and are skipped, and said so, without it.`,
 					if chaos.ExpectedToFail(sc, tag) && res.Err == "" && res.Requests > 0 {
 						bad = !res.HasFail() // a control that passes on the old release proves nothing
 					}
+					if sc.ControlSince != "" && tag != "" && !dry && res.Skipped == "" && !asJSON {
+						want, got := "PASS", "PASS"
+						if chaos.ExpectedToFail(sc, tag) {
+							want = "FAIL"
+						}
+						if res.HasFail() {
+							got = "FAIL"
+						}
+						verdict := "ok"
+						if want != got || res.Err != "" {
+							verdict = "WRONG"
+						}
+						fmt.Fprintf(out, "   control %s since %s on %s: expected %s, got %s: %s\n", sc.Name, sc.ControlSince, tag, want, got, verdict)
+					}
 					if bad || strict && !dry && res.Skipped != "" {
 						failed++
 					}
