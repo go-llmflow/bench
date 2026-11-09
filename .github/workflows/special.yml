@@ -87,7 +87,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        tag: [v0.38.1, v0.39.0]
+        # v0.38.1 loses records under a slow spool device on some loads (3253 of
+        # 3660 billed on one seed, none on two others): intermittent, so not a
+        # control (see the chaos page); the campaign runs the release that holds.
+        tag: [v0.39.0]
     services:
       postgres:
         image: postgres:17

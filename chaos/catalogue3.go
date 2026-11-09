@@ -40,6 +40,6 @@ func round3() []*Scenario {
 			Load: map[string]OrgLoad{
 				"etabA": {Workers: 9, Think: 20 * time.Millisecond, Tokens: []int{16}, Words: []int{8}},
 				"etabB": {Workers: 3, Think: 100 * time.Millisecond, Tokens: []int{16}, Words: []int{8}}},
-			Faults: []FaultAt{{Kind: "pg-hang", At: s(2), For: s(14)}}, Expect: []string{"slow-fsync"}, ControlSince: "v0.39.0"}),
+			Faults: []FaultAt{{Kind: "pg-hang", At: s(2), For: s(14)}}, Expect: []string{"slow-fsync"}}),
 	}
 }
