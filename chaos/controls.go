@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,7 +30,7 @@ func (s *Scenario) expects(name string) bool {
 
 // controlProbes runs the probes of the scenario's controls.
 func (w *World) controlProbes() (problems, notes []string) {
-	for _, f := range []func() ([]string, []string){w.schacSpoofProbe, w.nSlotsProbe, w.adminUsersProbe, w.spareGuardProbe, w.fallbackSpareProbe} {
+	for _, f := range []func() ([]string, []string){w.schacSpoofProbe, w.nSlotsProbe, w.nAdmissionProbe, w.adminUsersProbe, w.spareGuardProbe, w.fallbackSpareProbe, w.floodProbe, w.schacChangeProbe, w.longRunProbe, w.schacInstitutionProbe, w.sharedScimProbe, w.spoolFairProbe} {
 		p, n := f()
 		problems, notes = append(problems, p...), append(notes, n...)
 	}
@@ -165,6 +167,9 @@ func (w *World) adminUsersProbe() (problems, notes []string) {
 	if c := create("carol@a.example"); c != 400 {
 		problems = append(problems, fmt.Sprintf("admin-users: the org admin of etabB creating carol@a.example, in idpA's domain, got %d (want 400: only the domains of its own institutions)", c))
 	}
+	if w.Sc.F.SCIM {
+		problems = append(problems, w.scimAfterSquat(create)...)
+	}
 	if err := g.Stop(); err != nil {
 		problems = append(problems, fmt.Sprintf("admin-users: stop: %v", err))
 	} else if err := g.Start(40 * time.Second); err != nil {
@@ -230,6 +235,19 @@ func (g *fakeGuard) Calls() []guardCall {
 // setupControlFakes starts the fakes a scenario's features ask for and adds
 // their configuration to the topology.
 func (w *World) setupControlFakes(topo *Topology) error {
+	w.setupControl39(topo)
+	if w.Sc.F.UpstreamNet {
+		px, err := NewProxy(strings.TrimPrefix(w.Up.URL(), "http://"))
+		if err != nil {
+			return err
+		}
+		w.closers = append(w.closers, px.Close)
+		w.UpProxy = px
+		topo.UpstreamURL = "http://" + px.Addr()
+	}
+	if w.Sc.F.SCIM {
+		topo.Extra += fmt.Sprintf("scim {\n  token_file = \"@DIR@/scim.token\"\n  base_url = \"https://llm.example.org/scim/v2\"\n  domain = \"s.example\"\n  group \"Lab Physics\" { team = %q }\n}\n", TeamOf["etabA"])
+	}
 	if w.Sc.F.Guard {
 		w.Guard = newFakeGuard()
 		w.closers = append(w.closers, w.Guard.srv.Close)
@@ -414,4 +432,90 @@ func init() {
 		w.PGProxy.Set(ProxyBlackhole, 0)
 		return func() { w.PGProxy.Set(ProxyPass, 0) }, nil
 	}
+}
+
+// scimAfterSquat: the org admin of etabB tries to pre-create carol@s.example,
+// the person of the SCIM institution (domain s.example, bound to etabA's team);
+// that must be refused 400, and the real person, provisioned by SCIM and put in
+// the group "Lab Physics", must get her role. On v0.37.1 the squat succeeds and
+// SCIM never manages the hand-made user.
+func (w *World) scimAfterSquat(create func(string) int) (problems []string) {
+	g := w.Primary()
+	const carol = "carol@s.example"
+	if c := create(carol); c != 400 {
+		problems = append(problems, fmt.Sprintf("admin-users: the org admin of etabB creating %s, the SCIM institution's person, got %d (want 400)", carol, c))
+	}
+	tok, err := os.ReadFile(filepath.Join(g.Dir, "scim.token"))
+	if err != nil {
+		return append(problems, "admin-users: no SCIM token file: "+err.Error())
+	}
+	scim := func(path, body string) (int, string) {
+		req, err := http.NewRequest("POST", g.URL+"/scim/v2"+path, strings.NewReader(body))
+		if err != nil {
+			return 0, err.Error()
+		}
+		req.Header.Set("Content-Type", "application/scim+json")
+		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(tok)))
+		resp, err := adminClient.Do(req)
+		if err != nil {
+			return 0, err.Error()
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		return resp.StatusCode, string(b)
+	}
+	code, body := scim("/Users", `{"schemas":["urn:ietf:params:scim:schemas:core:2.0:User"],"userName":"`+carol+`","active":true}`)
+	if code != 201 {
+		return append(problems, fmt.Sprintf("admin-users: SCIM provisioning of %s answered %d (want 201): %.200s", carol, code, body))
+	}
+	var u struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal([]byte(body), &u)
+	if code, body = scim("/Groups", `{"schemas":["urn:ietf:params:scim:schemas:core:2.0:Group"],"displayName":"Lab Physics","members":[{"value":"`+u.ID+`"}]}`); code != 201 {
+		return append(problems, fmt.Sprintf("admin-users: SCIM group answered %d (want 201): %.200s", code, body))
+	}
+	if _, b, err := g.Admin("GET", "/admin/users/"+carol+"/roles", ""); err != nil || !strings.Contains(string(b), TeamOf["etabA"]) || !strings.Contains(string(b), "member") {
+		problems = append(problems, fmt.Sprintf("admin-users: after the squat attempt, %s has no member role on %s: %.200s", carol, TeamOf["etabA"], b))
+	}
+	return problems
+}
+
+// ---- control n-admission: gateway v0.39.0, "n and best_of weigh on scheduling" ----
+
+// nAdmissionProbe: the owners keep 5 of the pool's 8 slots busy; the spare-only
+// borrower asks n = best_of = 4. A request that runs n sequences holds n slots
+// (v0.39.0) and a spare-only borrower needs room for all of them: with 3 free it
+// is refused 429 whole. v0.38.1 counted one slot and admitted it. The upstream's
+// concurrency must also stay within the pool.
+func (w *World) nAdmissionProbe() (problems, notes []string) {
+	if !w.Sc.expects("n-admission") {
+		return nil, nil
+	}
+	var attempts, admitted, refused int
+	for _, o := range w.Ledger.All() {
+		if o.Org != Borrower || o.Left || o.Status == 0 {
+			continue
+		}
+		attempts++
+		switch o.Status {
+		case 200:
+			admitted++
+		case 429:
+			refused++
+		}
+	}
+	switch {
+	case refused < 20:
+		problems = append(problems, fmt.Sprintf("n-admission: only %d borrower requests were refused of %d: the pool was not contended, the probe proves nothing", refused, attempts))
+	case admitted*20 > attempts:
+		problems = append(problems, fmt.Sprintf("n-admission: %d of %d n=4 borrower requests were admitted with only 3 slots free (at most 5 %% by a free slot in passing): a request of n sequences must hold n slots", admitted, attempts))
+	}
+	if m := w.Up.MaxInFlight(); m > PoolCapacity {
+		problems = append(problems, fmt.Sprintf("n-admission: %d requests were in flight at the upstream, above the pool of %d", m, PoolCapacity))
+	}
+	if len(problems) == 0 {
+		notes = append(notes, fmt.Sprintf("n-admission: %d of %d n=4 borrower requests admitted, %d refused 429, upstream peak %d of %d", admitted, attempts, refused, w.Up.MaxInFlight(), PoolCapacity))
+	}
+	return
 }

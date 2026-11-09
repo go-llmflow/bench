@@ -20,6 +20,7 @@ type Options struct {
 	WorkDir    string // durable directory of the run (never a temporary one)
 	Seed       uint64
 	PG         string // PostgreSQL DSN of the CI scenarios ("" locally)
+	Tag        string // the gateway release under test (vX.Y.Z), "" for the latest
 	DryRun     bool   // build the fakes and the configurations, run check-config, start nothing
 	Log        func(format string, a ...any)
 }
@@ -80,8 +81,16 @@ type World struct {
 	samples []inflightSample
 	// Guard is the counting fake guard model, Small the fallback model's upstream.
 	satAt time.Time // when the saturate fault started
-	Guard *fakeGuard
-	Small *Upstream
+	// round 2: the relay in front of the upstream, the hostile clients' answers,
+	// the schac the federation IdP states, the long run's samples
+	UpProxy       *Proxy
+	adminFlood    floodStats
+	fedFlood      floodStats
+	schacAt       time.Time
+	schacOverride string
+	trends        []trendSample
+	Guard         *fakeGuard
+	Small         *Upstream
 	// oldToken is a token signed before a hard rotation, per IdP, kept to be
 	// presented afterwards.
 	oldToken map[string]string
@@ -131,12 +140,16 @@ func Setup(ctx context.Context, opt Options, sc *Scenario) (*World, error) {
 	if sc.F.ModelsDownAtStart {
 		w.Up.Update(func(f *UpstreamFaults) { f.ModelsDown = true })
 	}
-	topo := Topology{UpstreamURL: w.Up.URL(), Fluids: sc.F.Fluids, Federation: sc.F.Federation, NoModelLen: sc.F.ModelsDownAtStart}
+	topo := Topology{Tag: opt.Tag, UpstreamURL: w.Up.URL(), Fluids: sc.F.Fluids, Federation: sc.F.Federation, NoModelLen: sc.F.ModelsDownAtStart}
 	if err := w.setupControlFakes(&topo); err != nil {
 		return fail(err)
 	}
 	if sc.F.Fluids {
 		w.DCGM = fakeupstream.NewDCGM("GPU-aaa", "GPU-bbb")
+		if sc.F.DCGMGlitch { // 2.6e12 mJ: 1 kW for 30 days, as in the gateway's own proof
+			w.DCGM.Preload("GPU-aaa", 2_600_000_000_000)
+			w.DCGM.Preload("GPU-bbb", 2_600_000_000_000)
+		}
 		w.dcgmSrv = httptest.NewServer(w.DCGM)
 		w.closers = append(w.closers, w.dcgmSrv.Close)
 		topo.DCGMURL = w.dcgmSrv.URL
@@ -159,11 +172,26 @@ func Setup(ctx context.Context, opt Options, sc *Scenario) (*World, error) {
 			p := NewIdP(d.name, "llmflow-"+d.name)
 			w.IdPs[d.name] = p
 			w.closers = append(w.closers, p.Close)
-			ref := IdPRef{Name: d.name, Issuer: p.Issuer(), Audience: p.Audience, Org: d.org, Team: d.team, Domain: d.domain, Legacy: d.name == "idpA"}
+			ref := IdPRef{Name: d.name, Issuer: p.Issuer(), Audience: p.Audience, Org: d.org, Team: d.team, Domain: d.domain, Legacy: d.name == "idpA" && !sc.F.SCIM && !sc.F.SharedSCIM} // a SCIM domain and a legacy domain cannot both be (config refuses two)
 			if d.name == "fed" {
 				ref.Accept = []string{"univ-c.example"}
 			}
 			topo.IdPs = append(topo.IdPs, ref)
+		}
+		if sc.F.SchacInst {
+			c, d := "univ-c.example", "univ-d.example"
+			for _, r := range []IdPRef{
+				{Name: "instA", Accept: []string{c, d}},
+				{Name: "instB", Accept: []string{c, d}, AcceptClaim: "schacHomeOrganization"},
+				{Name: "instC", Domains: []string{c, d}},
+			} {
+				p := NewIdP(r.Name, "llmflow-"+r.Name)
+				w.IdPs[r.Name] = p
+				w.closers = append(w.closers, p.Close)
+				r.Issuer, r.Audience, r.Org, r.Team = p.Issuer(), p.Audience, Borrower, TeamOf[Borrower]
+				r.MapClaim, r.MapValue = "schac_home_organization", c
+				topo.IdPs = append(topo.IdPs, r)
+			}
 		}
 	}
 	nrep := max(1, sc.Replicas)
@@ -271,6 +299,16 @@ func (w *World) provision() error {
 			w.Clients = append(w.Clients, c)
 		}
 	}
+	if w.Sc.F.SpoolFair {
+		// generous budgets on the two organisations that share the spool: a
+		// budgeted request is what the spool's fairness refuses
+		for _, org := range []string{"etabA", "etabB"} {
+			w.Budgets = append(w.Budgets, BudgetSpec{"org", org, "day", 1e6, 5e5})
+			if err := g.SetBudget("org", org, "day", 1e6, 5e5); err != nil {
+				return err
+			}
+		}
+	}
 	if !w.Sc.F.Budgets {
 		return nil
 	}
@@ -330,6 +368,11 @@ func (w *World) mintFor(idp, sub, scoped string, ttl time.Duration) (string, err
 	extra := map[string]any{}
 	if idp == "fed" {
 		extra["schac_home_organization"] = "univ-c.example"
+		w.mu.Lock()
+		if w.schacOverride != "" {
+			extra["schac_home_organization"] = w.schacOverride
+		}
+		w.mu.Unlock()
 		// gateway v0.38.0 (breaking): the scope of the person's name must equal a
 		// value of the schac claim, so a federation proxy's token carries a
 		// scoped name. v0.37.1 accepts it too: the scope is in the accept list.

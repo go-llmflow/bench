@@ -325,7 +325,10 @@ func inv2(w *World, j *join) Verdict {
 			// in CI: client-disconnects, +1 request per key in 4 of 10 runs, both
 			// gateway releases, no cost). Like a failed request: the count may
 			// include it, the money may not (the cost bounds below are unchanged).
-			if r.Left {
+			// Likewise a request the gateway answered 5xx without the upstream
+			// ever receiving it (the link to the upstream was cut: net-upstream-loss,
+			// 24 to 35 per key): counted like an upstream failure, at no cost.
+			if r.Left || r.Status >= 500 {
 				b.hiReq++
 			}
 		case FateFailed:

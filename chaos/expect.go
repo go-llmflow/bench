@@ -103,7 +103,8 @@ func (w *World) authProblems(j *join) (problems []string, notes []string) {
 					continue
 				}
 				n++
-				if r.Status == 401 || r.Status >= 500 {
+				// with a flapping upstream link a 5xx is the link's, not the IdP's
+				if r.Status == 401 || r.Status >= 500 && !w.Sc.F.UpstreamNet {
 					bad++
 				}
 			}
