@@ -371,7 +371,14 @@ func (w *World) burst(ctx context.Context, hc *http.Client, bi int, b Burst, _ *
 // settle waits until the accounting has caught up: the gateway's spend stops
 // moving and nothing is in flight upstream.
 func (w *World) settle(ctx context.Context) {
-	deadline := time.Now().Add(20 * time.Second)
+	// A spool on a slow device drains in bursts, 300 ms apart: seven seconds
+	// without a change, not two, say that it has finished (a 1.7 % shortfall of
+	// billed requests on v0.39.0 seed 2 was the judge reading too early).
+	need, wait := 3, 20*time.Second
+	if w.Sc.F.SlowFS || w.Sc.F.SmallFS {
+		need, wait = 10, 60*time.Second
+	}
+	deadline := time.Now().Add(wait)
 	var last float64 = -1
 	stable := 0
 	for time.Now().Before(deadline) && ctx.Err() == nil {
@@ -379,7 +386,7 @@ func (w *World) settle(ctx context.Context) {
 		tot, err := w.spendTotal()
 		if err == nil && tot == last && w.Up.inFl.Load() == 0 {
 			stable++
-			if stable >= 3 {
+			if stable >= need {
 				break
 			}
 		} else {
