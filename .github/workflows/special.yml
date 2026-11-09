@@ -115,13 +115,13 @@ jobs:
           sudo mount -t tmpfs -o size=1m tmpfs "$GITHUB_WORKSPACE/smallfs"
           sudo chown "$(id -u):$(id -g)" "$GITHUB_WORKSPACE/smallfs"
           df -h "$GITHUB_WORKSPACE/smallfs"
-      - name: a filesystem whose writes take 300 ms (device-mapper delay over a loop device)
+      - name: a filesystem whose writes take 500 ms (device-mapper delay over a loop device)
         run: |
           sudo modprobe dm-delay
           truncate -s 64M "$RUNNER_TEMP/slow.img"
           LOOP="$(sudo losetup -f --show "$RUNNER_TEMP/slow.img")"
           SZ="$(sudo blockdev --getsz "$LOOP")"
-          echo "0 $SZ delay $LOOP 0 0 $LOOP 0 300" | sudo dmsetup create slowdev
+          echo "0 $SZ delay $LOOP 0 0 $LOOP 0 500" | sudo dmsetup create slowdev
           sudo mkfs.ext4 -q /dev/mapper/slowdev
           mkdir -p "$GITHUB_WORKSPACE/slowfs"
           sudo mount /dev/mapper/slowdev "$GITHUB_WORKSPACE/slowfs"

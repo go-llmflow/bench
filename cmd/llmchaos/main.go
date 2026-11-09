@@ -276,7 +276,7 @@ environment) and are skipped, and said so, without it.`,
 					}
 					// --strict: a scenario that was skipped (no PostgreSQL) judged
 					// nothing, which in CI is a failure.
-					bad := res.Failed()
+					bad := res.FailsOutside(sc.Known)
 					if chaos.ExpectedToFail(sc, tag) && res.Err == "" && res.Requests > 0 {
 						bad = !res.HasFail() // a control that passes on the old release proves nothing
 					}

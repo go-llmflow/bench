@@ -74,6 +74,9 @@ func fullVerdicts(sc *Scenario) []Verdict {
 		if expectedNA(sc, n) {
 			s = NA
 		}
+		if sc.Known[n] != "" {
+			s = Fail // a filed defect of the gateway: the campaign keeps failing it
+		}
 		vs = append(vs, Verdict{N: n, Status: s})
 	}
 	return vs

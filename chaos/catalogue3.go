@@ -17,7 +17,8 @@ func round3() []*Scenario {
 		with(Scenario{Name: "clock-jump-tariff-band", Doc: "the gateway's clock jumps back one hour, forward two and back one again around the 23:00 change of the tariff band (an NTP step, a DST change): the energy is still conserved, the budgets and the refusals hold",
 			Needs: []string{"clock"}, F: Features{Fluids: true, BMC: true, Budgets: true, Clock: "tariff-edge"}, Duration: s(20), Load: steady(),
 			Faults: []FaultAt{{Kind: "clock-step", At: s(4), Arg: -3600}, {Kind: "clock-step", At: s(9), Arg: 7200}, {Kind: "clock-step", At: s(14), Arg: -3600}},
-			Skip:   map[int]string{9: "no federation mount"}}),
+			Skip:   map[int]string{9: "no federation mount"},
+			Known:  map[int]string{4: "go-llmflow/gateway#175"}}),
 		with(Scenario{Name: "combined-clock-jump-month-close-bmc-reset", Doc: "the clock steps back an hour, the BMC counter restarts and a month is closed, then the clock steps forward two hours, in ten seconds",
 			Needs: []string{"pg", "clock"}, F: Features{Fluids: true, BMC: true, Budgets: true, Clock: "tariff-edge"}, Duration: s(18), Load: steady(),
 			Faults: []FaultAt{{Kind: "clock-step", At: s(3), Arg: -3600}, {Kind: "bmc-counter-reset", At: s(5), Arg: 0}, {Kind: "month-close", At: s(7)},
@@ -32,10 +33,10 @@ func round3() []*Scenario {
 				"etabB": {Workers: 3, Think: 100 * time.Millisecond, Tokens: []int{16}, Words: []int{8}}},
 			Faults: []FaultAt{{Kind: "pg-hang", At: s(2), For: s(14)}}, Expect: []string{"spool-full"}}),
 		with(Scenario{Name: "spool-slow-fsync", Doc: "PostgreSQL hangs while the spool's writes are slow (a delayed block device): the requests are not slowed by the spool, and every answered request is billed exactly once",
-			Needs: []string{"pg", "slowfs"}, Replicas: 1, F: Features{SlowFS: true}, Duration: s(22),
+			Needs: []string{"pg", "slowfs"}, Replicas: 1, F: Features{SlowFS: true}, Duration: s(26),
 			Load: map[string]OrgLoad{
-				"etabA": {Workers: 6, Think: 50 * time.Millisecond, Tokens: []int{16}, Words: []int{8}},
+				"etabA": {Workers: 12, Think: 20 * time.Millisecond, Tokens: []int{16}, Words: []int{8}},
 				"etabB": {Workers: 3, Think: 100 * time.Millisecond, Tokens: []int{16}, Words: []int{8}}},
-			Faults: []FaultAt{{Kind: "pg-hang", At: s(2), For: s(14)}}, Expect: []string{"slow-fsync"}}),
+			Faults: []FaultAt{{Kind: "pg-hang", At: s(2), For: s(18)}}, Expect: []string{"slow-fsync"}, ControlSince: "v0.39.0"}),
 	}
 }

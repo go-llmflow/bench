@@ -78,6 +78,11 @@ type Scenario struct {
 	// ControlSince: a positive control, which must FAIL on gateway releases
 	// older than this tag and PASS from it on (see ExpectedToFail).
 	ControlSince string
+	// Known: invariants this scenario fails because of a defect of the gateway
+	// that is filed with a reproducer (the issue, as "owner/repo#N"). The
+	// campaign keeps judging them; it fails when one of them PASSES, so that a
+	// fixed defect does not stay listed.
+	Known map[int]string
 }
 
 // rampAt is when the last owner's workers start.

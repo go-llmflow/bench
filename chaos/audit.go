@@ -80,8 +80,13 @@ func AuditGroup(rs []Result, seeds []int, group string) []string {
 		for _, v := range r.Verdicts {
 			have[v.N] = true
 			switch {
+			case v.Status == Fail && sc.Known[v.N] != "":
+				// a defect of the gateway, reduced to a reproducer and filed: the
+				// campaign keeps judging it and does not hide it
 			case v.Status == Fail:
 				out = append(out, fmt.Sprintf("%s: invariant %d FAIL: %s", key, v.N, v.Detail))
+			case v.Status == Pass && sc.Known[v.N] != "":
+				out = append(out, fmt.Sprintf("%s: invariant %d passes, but the scenario lists it as a known defect (%s): the defect looks fixed, remove it from Known", key, v.N, sc.Known[v.N]))
 			case v.Status == NA && !expectedNA(sc, v.N):
 				out = append(out, fmt.Sprintf("%s: invariant %d unexpected N/A: %s", key, v.N, v.Detail))
 			}
@@ -203,4 +208,24 @@ func TagAtLeast(tag, min string) bool {
 		}
 	}
 	return true
+}
+
+// FailsOutside is Failed, except that a failed invariant listed in known (a
+// filed defect of the gateway) does not count.
+func (r Result) FailsOutside(known map[int]string) bool {
+	if len(known) == 0 {
+		return r.Failed()
+	}
+	if r.Err != "" || r.Skipped == "" && r.Requests == 0 {
+		return true
+	}
+	for _, v := range r.Verdicts {
+		if v.Status == Fail && known[v.N] == "" {
+			return true
+		}
+		if v.Status == Pass && known[v.N] != "" {
+			return true // the defect looks fixed
+		}
+	}
+	return false
 }

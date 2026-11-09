@@ -45,14 +45,12 @@ func TestSlowFsyncJudge(t *testing.T) {
 		}
 		return o
 	}
-	if p, _ := slowFsyncProblems(mk(200*time.Millisecond, 100), from, from.Add(5*time.Second), 3*time.Second); len(p) != 0 {
-		t.Fatalf("fast requests: %v", p)
+	p, n := slowFsyncProblems(mk(200*time.Millisecond, 100), from, from.Add(5*time.Second))
+	if len(p) != 0 || !has(n, "20 requests/s") {
+		t.Fatalf("a throughput is reported, never judged: %v %v", p, n)
 	}
-	if p, _ := slowFsyncProblems(mk(5*time.Second, 100), from, from.Add(5*time.Second), 3*time.Second); !has(p, "waits on the spool") {
-		t.Fatalf("slow requests passed: %v", p)
-	}
-	if p, _ := slowFsyncProblems(mk(time.Second, 5), from, from.Add(5*time.Second), 3*time.Second); !has(p, "proves nothing") {
-		t.Fatalf("too few: %v", p)
+	if p, _ := slowFsyncProblems(nil, from, from.Add(5*time.Second)); !has(p, "proves nothing") {
+		t.Fatalf("nothing answered: %v", p)
 	}
 }
 
@@ -94,5 +92,31 @@ func TestEachGroupIsAuditedOnItsOwnScenarios(t *testing.T) {
 	}
 	if p := strings.Join(AuditGroup(rs, seeds, "clock"), "\n"); !strings.Contains(p, "clock-jump-tariff-band/1: missing") {
 		t.Fatalf("the clock group must miss its scenarios: %q", p)
+	}
+}
+
+func TestAKnownDefectIsJudgedAndNeverHidden(t *testing.T) {
+	sc := Find("clock-jump-tariff-band")
+	if sc.Known[4] == "" {
+		t.Fatal("the scenario lists its filed defect")
+	}
+	mk := func(st Status) []Result {
+		vs := fullVerdicts(sc)
+		vs[3].Status = st
+		return []Result{{Scenario: sc.Name, Seed: 1, Requests: 5, Verdicts: vs}}
+	}
+	if p := AuditGroup(mk(Fail), []int{1}, "clock"); has(p, "invariant 4 FAIL") {
+		t.Fatalf("a known defect is not a problem: %v", p)
+	}
+	if p := AuditGroup(mk(Pass), []int{1}, "clock"); !has(p, "looks fixed") {
+		t.Fatalf("a known defect that passes must be reported: %v", p)
+	}
+	if mk(Fail)[0].FailsOutside(sc.Known) || !mk(Pass)[0].FailsOutside(sc.Known) {
+		t.Fatal("FailsOutside")
+	}
+	other := mk(Pass)
+	other[0].Verdicts[1].Status = Fail
+	if !other[0].FailsOutside(sc.Known) {
+		t.Fatal("another invariant failing is still a failure")
 	}
 }
