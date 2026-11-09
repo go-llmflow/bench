@@ -6,14 +6,16 @@ import "time"
 // or a slow filesystem, and a PostgreSQL that turns read-only.
 func round3() []*Scenario {
 	return []*Scenario{
-		with(Scenario{Name: "clock-month-close-with-content", Doc: "the gateway's clock starts on the 20th of the month that has just ended, traffic is stamped in it, the clock returns to real time and that month is closed: invariant 5 judges a month WITH content",
-			Needs: []string{"pg", "clock"}, F: Features{Fluids: true, BMC: true, Clock: "prev-month-20th"}, Duration: s(18), Load: map[string]OrgLoad{
+		with(Scenario{Name: "clock-month-close-with-content", Doc: "the gateway's clock starts on the 5th of the next month, so the current month, which holds the traffic, has just ended for it: that month is closed while traffic runs and the clock steps an hour back and forth, and invariant 5 judges a month WITH content",
+			Needs: []string{"pg", "clock"}, F: Features{Fluids: true, BMC: true, Clock: "next-month-5th"}, Duration: s(18), Load: map[string]OrgLoad{
 				"etabA": {Workers: 3, Think: 100 * time.Millisecond, Tokens: []int{16, 32}, Words: []int{8}},
 				"etabB": {Workers: 2, Think: 100 * time.Millisecond, Tokens: []int{16, 32}, Words: []int{20}}},
-			Faults: []FaultAt{{Kind: "clock-real", At: s(8)}, {Kind: "month-close", At: s(11)}},
-			Skip: map[int]string{2: "the clock puts the records in last month: the harness's reports window is today's",
+			// the clock is a month ahead of the records, which are stamped in real
+			// time; it is stepped an hour back and forth around the close
+			Faults: []FaultAt{{Kind: "month-close", At: s(8)}, {Kind: "clock-step", At: s(11), Arg: -3600}, {Kind: "clock-step", At: s(14), Arg: 3600}},
+			Skip: map[int]string{2: "the gateway's clock is a month ahead of the records: the harness's reports window is today's",
 				3: "no borrower in this scenario",
-				4: "the clock puts the energy in last month: the harness's reports window is today's"},
+				4: "the gateway's clock is a month ahead of the energy: the harness's reports window is today's"},
 			Expect: []string{"month-content"}}),
 		with(Scenario{Name: "clock-jump-tariff-band", Doc: "the gateway's clock jumps back one hour, forward two and back one again around the 23:00 change of the tariff band (an NTP step, a DST change): the energy is still conserved, the budgets and the refusals hold",
 			Needs: []string{"clock"}, F: Features{Fluids: true, BMC: true, Budgets: true, Clock: "tariff-edge"}, Duration: s(20), Load: steady(),

@@ -8,14 +8,18 @@ import (
 
 func TestStartClockOffsets(t *testing.T) {
 	now := time.Date(2026, 11, 9, 15, 0, 0, 0, time.UTC)
-	got := now.Add(startClockOffset("prev-month-20th", now))
-	if want := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC); !got.Equal(want) {
-		t.Fatalf("prev-month-20th = %v, want %v", got, want)
+	got := now.Add(startClockOffset("next-month-5th", now))
+	if want := time.Date(2026, 12, 5, 12, 0, 0, 0, time.UTC); !got.Equal(want) {
+		t.Fatalf("next-month-5th = %v, want %v", got, want)
 	}
-	// January: the previous month is December of the year before
-	jan := time.Date(2027, 1, 5, 8, 0, 0, 0, time.UTC)
-	if got := jan.Add(startClockOffset("prev-month-20th", jan)); !got.Equal(time.Date(2026, 12, 20, 12, 0, 0, 0, time.UTC)) {
-		t.Fatalf("january: %v", got)
+	// December: the next month is January of the year after
+	dec := time.Date(2026, 12, 28, 8, 0, 0, 0, time.UTC)
+	if got := dec.Add(startClockOffset("next-month-5th", dec)); !got.Equal(time.Date(2027, 1, 5, 12, 0, 0, 0, time.UTC)) {
+		t.Fatalf("december: %v", got)
+	}
+	// and the month that has just ended at that time is the one the records are in
+	if k, _, _ := prevMonthAt(got); k != "2026-11" {
+		t.Fatalf("prevMonthAt = %s", k)
 	}
 	e := now.Add(startClockOffset("tariff-edge", now))
 	loc, _ := time.LoadLocation("Europe/Paris")

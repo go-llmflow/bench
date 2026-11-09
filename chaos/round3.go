@@ -17,16 +17,17 @@ import (
 // startClockOffset is where a scenario starts its gateway's clock, as an offset
 // from real time at now.
 //
-//	prev-month-20th: noon UTC on the 20th of the month that has just ended, so
-//	  that the traffic is stamped in a month that can be closed once the clock is
-//	  back to real time: a closed month WITH content;
+//	next-month-5th: noon UTC on the 5th of the NEXT month: the records are
+//	  stamped with real time (the gateway stamps them with time.Now(), not with
+//	  its clock), so the current month, which has just ended for the gateway,
+//	  holds them: a closed month WITH content;
 //	tariff-edge: 15 s before the next 23:00 in Europe/Paris, where the tariff
 //	  changes from "peak" to "night".
 func startClockOffset(kind string, now time.Time) time.Duration {
 	switch kind {
-	case "prev-month-20th":
+	case "next-month-5th":
 		u := now.UTC()
-		t := time.Date(u.Year(), u.Month(), 1, 12, 0, 0, 0, time.UTC).AddDate(0, -1, 19)
+		t := time.Date(u.Year(), u.Month(), 1, 12, 0, 0, 0, time.UTC).AddDate(0, 1, 4)
 		return t.Sub(now)
 	case "tariff-edge":
 		loc, err := time.LoadLocation("Europe/Paris")

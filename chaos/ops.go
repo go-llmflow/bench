@@ -11,8 +11,20 @@ import (
 // Operations injected during traffic (PostgreSQL scenarios: CI).
 
 // prevMonth is the month that has just ended, the only kind that can be closed.
-func prevMonth() (key, from, to string) {
-	n := time.Now().UTC()
+func prevMonth() (key, from, to string) { return prevMonthAt(time.Now()) }
+
+// gwNow is the time the gateways believe it is.
+func (w *World) gwNow() time.Time {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return time.Now().Add(w.clockOff)
+}
+
+func (w *World) prevMonth() (key, from, to string) { return prevMonthAt(w.gwNow()) }
+
+// prevMonthAt is the month that has just ended at t.
+func prevMonthAt(t time.Time) (key, from, to string) {
+	n := t.UTC()
 	first := time.Date(n.Year(), n.Month(), 1, 0, 0, 0, 0, time.UTC)
 	p := first.AddDate(0, -1, 0)
 	return p.Format("2006-01"), p.Format("2006-01-02"), first.Format("2006-01-02")
@@ -21,7 +33,7 @@ func prevMonth() (key, from, to string) {
 // closedView is what a reader sees of a month: the fluids report and the spend
 // report over it.
 func (w *World) closedView() (string, error) {
-	_, from, to := prevMonth()
+	_, from, to := w.prevMonth()
 	var out bytes.Buffer
 	for _, q := range []string{"/admin/fluids?group_by=org,pool&from=" + from + "&to=" + to, "/admin/spend?group_by=org,team&from=" + from + "&to=" + to} {
 		code, b, err := w.Primary().Admin("GET", q, "")
@@ -35,7 +47,7 @@ func (w *World) closedView() (string, error) {
 
 func init() {
 	faultTable["month-close"] = func(w *World, f FaultAt) (func(), error) {
-		m, _, _ := prevMonth()
+		m, _, _ := w.prevMonth()
 		code, b, err := w.Primary().Admin("POST", "/admin/billing/close?month="+m, "")
 		if err != nil {
 			return nil, err
@@ -82,7 +94,7 @@ type closedMonth struct {
 // monthSpend is the total cost the spend report holds over the month that has
 // just ended.
 func (w *World) monthSpend() (float64, error) {
-	_, from, to := prevMonth()
+	_, from, to := w.prevMonth()
 	code, b, err := w.Primary().Admin("GET", "/admin/spend?group_by=org&from="+from+"&to="+to, "")
 	if err != nil || code != 200 {
 		return 0, fmt.Errorf("spend of the closed month: %d %v %s", code, err, b)
