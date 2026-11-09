@@ -186,7 +186,7 @@ func Catalogue() []*Scenario {
 			Faults: []FaultAt{{Kind: "idp-down", Target: "idpA", At: s(3), For: s(7)}, {Kind: "idp-down", Target: "idpB", At: s(3), For: s(7)},
 				{Kind: "idp-down", Target: "fed", At: s(3), For: s(7)}}}),
 	}
-	return append(cat, round2()...)
+	return append(append(cat, round2()...), round3()...)
 }
 
 // pgOne is a single-gateway scenario on PostgreSQL (CI): operations that need a

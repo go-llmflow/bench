@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -21,8 +22,12 @@ type Options struct {
 	Seed       uint64
 	PG         string // PostgreSQL DSN of the CI scenarios ("" locally)
 	Tag        string // the gateway release under test (vX.Y.Z), "" for the latest
-	DryRun     bool   // build the fakes and the configurations, run check-config, start nothing
-	Log        func(format string, a ...any)
+	// ClockBuild: the binary is a -tags chaosclock build; SmallFS, SlowFS: empty
+	// directories on a tiny / a slow filesystem (see Scenario.Needs "clock", "fs", "slowfs").
+	ClockBuild      bool
+	SmallFS, SlowFS string
+	DryRun          bool // build the fakes and the configurations, run check-config, start nothing
+	Log             func(format string, a ...any)
 }
 
 // BudgetSpec is a budget the world set, with the scope's ground truth.
@@ -84,6 +89,8 @@ type World struct {
 	// round 2: the relay in front of the upstream, the hostile clients' answers,
 	// the schac the federation IdP states, the long run's samples
 	UpProxy       *Proxy
+	pgAdmin, pgDB string        // the admin DSN and the run's database (fault pg-readonly)
+	clockOff      time.Duration // the gateways' clock offset now (faults clock-step, clock-real)
 	adminFlood    floodStats
 	fedFlood      floodStats
 	schacAt       time.Time
@@ -141,6 +148,17 @@ func Setup(ctx context.Context, opt Options, sc *Scenario) (*World, error) {
 		w.Up.Update(func(f *UpstreamFaults) { f.ModelsDown = true })
 	}
 	topo := Topology{Tag: opt.Tag, UpstreamURL: w.Up.URL(), Fluids: sc.F.Fluids, Federation: sc.F.Federation, NoModelLen: sc.F.ModelsDownAtStart}
+	if sc.F.Clock != "" {
+		topo.Clock = true
+		w.clockOff = startClockOffset(sc.F.Clock, time.Now())
+		topo.ClockOffset = w.clockOff
+	}
+	switch {
+	case sc.F.SmallFS:
+		topo.SpoolDir = filepath.Join(opt.SmallFS, sc.Name+fmt.Sprintf("-%d", opt.Seed))
+	case sc.F.SlowFS:
+		topo.SpoolDir = filepath.Join(opt.SlowFS, sc.Name+fmt.Sprintf("-%d", opt.Seed))
+	}
 	if err := w.setupControlFakes(&topo); err != nil {
 		return fail(err)
 	}
@@ -213,6 +231,10 @@ func Setup(ctx context.Context, opt Options, sc *Scenario) (*World, error) {
 		}
 		w.closers = append(w.closers, px.Close)
 		w.PGProxy = px
+		w.pgAdmin = opt.PG
+		if u, err := url.Parse(dsn); err == nil {
+			w.pgDB = strings.TrimPrefix(u.Path, "/")
+		}
 		topo.PG = via
 	}
 	for i := 0; i < nrep; i++ {
@@ -299,7 +321,7 @@ func (w *World) provision() error {
 			w.Clients = append(w.Clients, c)
 		}
 	}
-	if w.Sc.F.SpoolFair {
+	if w.Sc.F.SpoolFair || w.Sc.F.SmallFS || w.Sc.F.SlowFS {
 		// generous budgets on the two organisations that share the spool: a
 		// budgeted request is what the spool's fairness refuses
 		for _, org := range []string{"etabA", "etabB"} {

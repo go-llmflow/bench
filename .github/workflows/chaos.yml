@@ -30,7 +30,7 @@ jobs:
         include:
           - { group: hostile, scenarios: 'hostile-borrower-flood hostile-admin-flood hostile-fed-metrics-hammer combined-hostile-tenants' }
           - { group: net-idp, scenarios: 'idp-schac-change net-upstream-latency net-upstream-loss combined-net-loss-idp-down-disconnects combined-schac-change-and-key-rotation' }
-          - { group: ha2, scenarios: 'net-replica-link-slow ha-budget-edge migrate-users-ha combined-saturation-pg-hang-replica-kill combined-partition-kill-budget-edge combined-month-close-bmc-reset-pg-slow' }
+          - { group: ha2, scenarios: 'net-replica-link-slow ha-budget-edge migrate-users-ha combined-saturation-pg-hang-replica-kill combined-partition-kill-budget-edge combined-month-close-bmc-reset-pg-slow pg-readonly-failover' }
           - { group: long, scenarios: 'long-mixed-traffic', timeout: 330 }
           - { group: upstream, scenarios: 'baseline upstream-5xx upstream-5xx-all upstream-hang upstream-slow-tokens upstream-cut-sse upstream-wrong-usage control-n-slots control-admin-users' }
           - { group: load, scenarios: 'models-down-at-start preemption-burst client-disconnects retry-storm-n-best-of budget-edge-burst' }

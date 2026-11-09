@@ -86,6 +86,16 @@ func Run(ctx context.Context, opt Options, sc *Scenario) (res Result) {
 		res.Skipped = "dry run: configuration passes check-config"
 		return res
 	}
+	for _, n := range []struct {
+		need string
+		ok   bool
+		what string
+	}{{"clock", opt.ClockBuild, "a gateway built with -tags chaosclock (--clock-build)"}, {"fs", opt.SmallFS != "", "a tiny filesystem (--small-fs)"}, {"slowfs", opt.SlowFS != "", "a slow filesystem (--slow-fs)"}} {
+		if sc.needs(n.need) && !n.ok {
+			res.Skipped = "needs " + n.what + "; run in CI"
+			return res
+		}
+	}
 	if sc.needs("pg") && opt.PG == "" {
 		res.Skipped = "needs PostgreSQL (--pg-dsn-file); run in CI"
 		return res

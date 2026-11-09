@@ -35,7 +35,23 @@ func expectedNA(sc *Scenario, n int) bool {
 // is a failed invariant, a run that broke, was skipped or sent nothing, an N/A
 // the scenario is not entitled to (a judge that stopped judging), and a
 // scenario x seed of the catalogue that has no result at all.
-func Audit(rs []Result, seeds []int) []string {
+func Audit(rs []Result, seeds []int) []string { return AuditGroup(rs, seeds, "") }
+
+// GroupOf names the CI job that runs a scenario: "clock" (a gateway built with
+// -tags chaosclock), "fs" (a tiny or a slow filesystem) or "" (the sharded
+// campaign). A campaign is complete when every scenario of ITS group ran.
+func GroupOf(sc *Scenario) string {
+	switch {
+	case sc.needs("clock"):
+		return "clock"
+	case sc.needs("fs"), sc.needs("slowfs"):
+		return "fs"
+	}
+	return ""
+}
+
+// AuditGroup is Audit for the scenarios of one group.
+func AuditGroup(rs []Result, seeds []int, group string) []string {
 	var out []string
 	seen := map[string]bool{}
 	for _, r := range rs {
@@ -77,6 +93,9 @@ func Audit(rs []Result, seeds []int) []string {
 		}
 	}
 	for _, sc := range Catalogue() {
+		if GroupOf(sc) != group {
+			continue
+		}
 		for _, s := range seeds {
 			if k := fmt.Sprintf("%s/%d", sc.Name, s); !seen[k] {
 				out = append(out, k+": missing from the campaign")
@@ -118,6 +137,11 @@ func semver(t string) (v [3]int, ok bool) {
 // must fail on it are required to fail (a control that passes on the old
 // release proves nothing) and their failures are not problems.
 func AuditTag(rs []Result, seeds []int, tag string) []string {
+	return AuditTagGroup(rs, seeds, tag, "")
+}
+
+// AuditTagGroup is AuditTag for the scenarios of one group.
+func AuditTagGroup(rs []Result, seeds []int, tag, group string) []string {
 	var keep []Result
 	var out []string
 	for _, r := range rs {
@@ -137,7 +161,7 @@ func AuditTag(rs []Result, seeds []int, tag string) []string {
 			out = append(out, fmt.Sprintf("%s/%d: control run broke (%s%s)", r.Scenario, r.Seed, r.Err, r.Skipped))
 		}
 	}
-	out = append(out, Audit(keep, seeds)...)
+	out = append(out, AuditGroup(keep, seeds, group)...)
 	// the controls removed from keep are not "missing": drop those lines
 	var res []string
 	for _, l := range out {

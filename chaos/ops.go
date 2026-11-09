@@ -2,6 +2,7 @@ package chaos
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os/exec"
 	"time"
@@ -46,8 +47,12 @@ func init() {
 		if err != nil {
 			return nil, err
 		}
+		spent, err := w.monthSpend()
+		if err != nil {
+			return nil, err
+		}
 		w.mu.Lock()
-		w.closed = &closedMonth{Month: m, View: view}
+		w.closed = &closedMonth{Month: m, View: view, Spend: spent}
 		w.mu.Unlock()
 		return nil, nil
 	}
@@ -69,7 +74,41 @@ func init() {
 	}
 }
 
-type closedMonth struct{ Month, View string }
+type closedMonth struct {
+	Month, View string
+	Spend       float64 // the month's spend when it was closed
+}
+
+// monthSpend is the total cost the spend report holds over the month that has
+// just ended.
+func (w *World) monthSpend() (float64, error) {
+	_, from, to := prevMonth()
+	code, b, err := w.Primary().Admin("GET", "/admin/spend?group_by=org&from="+from+"&to="+to, "")
+	if err != nil || code != 200 {
+		return 0, fmt.Errorf("spend of the closed month: %d %v %s", code, err, b)
+	}
+	var out struct {
+		Rows []SpendRow `json:"rows"`
+	}
+	if err := json.Unmarshal(b, &out); err != nil {
+		return 0, err
+	}
+	var t float64
+	for _, r := range out.Rows {
+		t += r.Cost
+	}
+	return t, nil
+}
+
+// closedContentProblem: a scenario that closes a month WITH content (it expects
+// "month-content") must have closed a month that holds money; otherwise the
+// immutability it judged was the immutability of an empty report.
+func closedContentProblem(expect bool, spend float64) string {
+	if expect && spend <= 0 {
+		return "the closed month held no spend: invariant 5 judged an empty month (the clock did not put the traffic in it)"
+	}
+	return ""
+}
 
 // month-close judgement: invariant 5.
 func inv5Closed(w *World) Verdict {
@@ -78,6 +117,9 @@ func inv5Closed(w *World) Verdict {
 	w.mu.Unlock()
 	if c == nil {
 		return verdict(5, NA, "no scenario step closed a month")
+	}
+	if p := closedContentProblem(w.Sc.expects("month-content"), c.Spend); p != "" {
+		return verdict(5, Fail, "%s", p)
 	}
 	after, err := w.closedView()
 	if err != nil {
@@ -90,5 +132,5 @@ func inv5Closed(w *World) Verdict {
 	if err != nil || code != 409 {
 		return verdict(5, Fail, "closing %s again answered %d (%v), want 409: a closed month cannot be reopened", c.Month, code, err)
 	}
-	return verdict(5, Pass, "month %s closed during traffic: reports byte-identical afterwards, a second close refused with 409", c.Month)
+	return verdict(5, Pass, "month %s closed during traffic (spend %.3f in it): reports byte-identical afterwards, a second close refused with 409", c.Month, c.Spend)
 }
