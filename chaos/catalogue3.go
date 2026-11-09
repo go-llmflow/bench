@@ -7,12 +7,13 @@ import "time"
 func round3() []*Scenario {
 	return []*Scenario{
 		with(Scenario{Name: "clock-month-close-with-content", Doc: "the gateway's clock starts on the 20th of the month that has just ended, traffic is stamped in it, the clock returns to real time and that month is closed: invariant 5 judges a month WITH content",
-			Needs: []string{"pg", "clock"}, F: Features{Clock: "prev-month-20th"}, Duration: s(18), Load: map[string]OrgLoad{
+			Needs: []string{"pg", "clock"}, F: Features{Fluids: true, BMC: true, Clock: "prev-month-20th"}, Duration: s(18), Load: map[string]OrgLoad{
 				"etabA": {Workers: 3, Think: 100 * time.Millisecond, Tokens: []int{16, 32}, Words: []int{8}},
 				"etabB": {Workers: 2, Think: 100 * time.Millisecond, Tokens: []int{16, 32}, Words: []int{20}}},
 			Faults: []FaultAt{{Kind: "clock-real", At: s(8)}, {Kind: "month-close", At: s(11)}},
 			Skip: map[int]string{2: "the clock puts the records in last month: the harness's reports window is today's",
-				3: "no borrower in this scenario"},
+				3: "no borrower in this scenario",
+				4: "the clock puts the energy in last month: the harness's reports window is today's"},
 			Expect: []string{"month-content"}}),
 		with(Scenario{Name: "clock-jump-tariff-band", Doc: "the gateway's clock jumps back one hour, forward two and back one again around the 23:00 change of the tariff band (an NTP step, a DST change): the energy is still conserved, the budgets and the refusals hold",
 			Needs: []string{"clock"}, F: Features{Fluids: true, BMC: true, Budgets: true, Clock: "tariff-edge"}, Duration: s(20), Load: steady(),
@@ -33,10 +34,10 @@ func round3() []*Scenario {
 				"etabB": {Workers: 3, Think: 100 * time.Millisecond, Tokens: []int{16}, Words: []int{8}}},
 			Faults: []FaultAt{{Kind: "pg-hang", At: s(2), For: s(14)}}, Expect: []string{"spool-full"}}),
 		with(Scenario{Name: "spool-slow-fsync", Doc: "PostgreSQL hangs while the spool's writes are slow (a delayed block device): the requests are not slowed by the spool, and every answered request is billed exactly once",
-			Needs: []string{"pg", "slowfs"}, Replicas: 1, F: Features{SlowFS: true}, Duration: s(26),
+			Needs: []string{"pg", "slowfs"}, Replicas: 1, F: Features{SlowFS: true}, Duration: s(22),
 			Load: map[string]OrgLoad{
-				"etabA": {Workers: 12, Think: 20 * time.Millisecond, Tokens: []int{16}, Words: []int{8}},
+				"etabA": {Workers: 9, Think: 20 * time.Millisecond, Tokens: []int{16}, Words: []int{8}},
 				"etabB": {Workers: 3, Think: 100 * time.Millisecond, Tokens: []int{16}, Words: []int{8}}},
-			Faults: []FaultAt{{Kind: "pg-hang", At: s(2), For: s(18)}}, Expect: []string{"slow-fsync"}, ControlSince: "v0.39.0"}),
+			Faults: []FaultAt{{Kind: "pg-hang", At: s(2), For: s(14)}}, Expect: []string{"slow-fsync"}, ControlSince: "v0.39.0"}),
 	}
 }

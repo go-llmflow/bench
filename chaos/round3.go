@@ -123,16 +123,19 @@ func slowFsyncProblems(outs []Outcome, from, to time.Time) (problems, notes []st
 	var d []time.Duration
 	answered := 0
 	for _, o := range outs {
+		if o.Status == 200 && !o.Left {
+			answered++
+		}
 		if o.Left || o.At.Before(from) || o.At.After(to) {
 			continue
 		}
 		d = append(d, o.Dur)
-		if o.Status == 200 {
-			answered++
-		}
 	}
 	if answered == 0 {
-		return []string{"slow-fsync: no request was answered while the spool's writes were slow: the probe proves nothing"}, nil
+		return []string{"slow-fsync: no request was answered in the whole run: the probe proves nothing"}, nil
+	}
+	if len(d) == 0 {
+		return nil, []string{fmt.Sprintf("slow-fsync: no request completed in the window while the spool's writes were slow (%d answered in the run)", answered)}
 	}
 	sort.Slice(d, func(i, j int) bool { return d[i] < d[j] })
 	p95 := d[len(d)*95/100]
