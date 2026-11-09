@@ -18,7 +18,7 @@ permissions:
 
 env:
   # the gateway commit that carries the test-only clock seam (go-llmflow/gateway#173)
-  CLOCK_REF: testclock-seam
+  CLOCK_REF: 3945f7521299a18efcfea047c4fbf34a4b69473d
 
 jobs:
   clock:
