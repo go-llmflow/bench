@@ -72,7 +72,7 @@ jobs:
       - name: verdicts
         if: always()
         run: cat "$GITHUB_WORKSPACE/chaos-table-${{ matrix.group }}.md" "$GITHUB_WORKSPACE/chaos-verdicts-${{ matrix.group }}.txt" >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:
           name: chaos-shard-${{ matrix.tag }}-${{ matrix.group }}
@@ -98,7 +98,7 @@ jobs:
         with:
           go-version: stable
           check-latest: true
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: chaos-shard-${{ matrix.tag }}-*
           path: shards
@@ -107,7 +107,7 @@ jobs:
       - name: summary
         if: always()
         run: cat chaos-merge.txt >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:
           name: chaos-evidence-${{ matrix.tag }}
@@ -131,7 +131,7 @@ jobs:
         with:
           go-version: stable
           check-latest: true
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: chaos-evidence-*
           path: evidence
@@ -142,7 +142,7 @@ jobs:
       - name: summary
         if: always()
         run: cat chaos-diff.txt >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:
           name: chaos-diff

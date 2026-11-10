@@ -60,7 +60,7 @@ jobs:
       - name: verdicts
         if: always()
         run: cat "$GITHUB_WORKSPACE/controls-table.md" "$GITHUB_WORKSPACE/controls-verdicts.txt" >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:
           name: ${{ matrix.set }}-${{ matrix.tag }}
