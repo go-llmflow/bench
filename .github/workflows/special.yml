@@ -27,7 +27,7 @@ jobs:
     timeout-minutes: 90
     services:
       postgres:
-        image: postgres:17
+        image: postgres:18
         env:
           POSTGRES_PASSWORD: chaos-throwaway-ci # a service container that exists for this job only
         ports: ['5432:5432']
@@ -93,7 +93,7 @@ jobs:
         tag: [v0.39.0]
     services:
       postgres:
-        image: postgres:17
+        image: postgres:18
         env:
           POSTGRES_PASSWORD: chaos-throwaway-ci # a service container that exists for this job only
         ports: ['5432:5432']
