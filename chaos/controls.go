@@ -30,7 +30,7 @@ func (s *Scenario) expects(name string) bool {
 
 // controlProbes runs the probes of the scenario's controls.
 func (w *World) controlProbes() (problems, notes []string) {
-	for _, f := range []func() ([]string, []string){w.schacSpoofProbe, w.nSlotsProbe, w.nAdmissionProbe, w.adminUsersProbe, w.spareGuardProbe, w.fallbackSpareProbe, w.floodProbe, w.schacChangeProbe, w.longRunProbe, w.schacInstitutionProbe, w.sharedScimProbe, w.spoolFairProbe} {
+	for _, f := range []func() ([]string, []string){w.schacSpoofProbe, w.nSlotsProbe, w.nAdmissionProbe, w.adminUsersProbe, w.spareGuardProbe, w.fallbackSpareProbe, w.floodProbe, w.schacChangeProbe, w.longRunProbe, w.schacInstitutionProbe, w.sharedScimProbe, w.spoolFairProbe, w.spoolFullProbe, w.slowFsyncProbe} {
 		p, n := f()
 		problems, notes = append(problems, p...), append(notes, n...)
 	}

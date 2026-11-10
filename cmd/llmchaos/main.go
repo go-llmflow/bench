@@ -85,6 +85,7 @@ func mergeCmd() *cobra.Command {
 		table      string
 		resultsOut string
 		tag        string
+		group      string
 	)
 	cmd := &cobra.Command{
 		Use:   "merge results.json...",
@@ -130,7 +131,7 @@ catalogue that no shard ran.`,
 			}
 			out := cmd.OutOrStdout()
 			fmt.Fprint(out, tb)
-			problems := chaos.AuditTag(all, seeds, tag)
+			problems := chaos.AuditTagGroup(all, seeds, tag, group)
 			for _, p := range problems {
 				fmt.Fprintln(out, "PROBLEM", p)
 			}
@@ -143,6 +144,7 @@ catalogue that no shard ran.`,
 	}
 	cmd.Flags().IntSliceVar(&seeds, "seed", []int{1}, "the seeds the campaign had to cover")
 	cmd.Flags().StringVar(&tag, "tag", "", "the gateway release the shards ran against (vX.Y.Z)")
+	cmd.Flags().StringVar(&group, "group", "", `the scenarios the campaign had to cover: "" (the sharded campaign), "clock" or "fs"`)
 	cmd.Flags().StringVar(&table, "table", "", "write the merged table (markdown) to this file")
 	cmd.Flags().StringVar(&resultsOut, "results", "", "write the merged results as JSON to this file (input of: llmchaos diff)")
 	return cmd
@@ -191,6 +193,8 @@ func runCmd() *cobra.Command {
 		seeds                    []int
 		all, asJSON, dry, strict bool
 		table, resultsFile, tag  string
+		smallFS, slowFS          string
+		clockBuild               bool
 		maxLoad                  float64
 		loadWait                 time.Duration
 		duration                 time.Duration
@@ -263,7 +267,7 @@ environment) and are skipped, and said so, without it.`,
 					sc = &c
 				}
 				for _, seed := range seeds {
-					opt := chaos.Options{Tag: tag, GatewayBin: gateway, WorkDir: workdir, Seed: uint64(seed), PG: pg, DryRun: dry,
+					opt := chaos.Options{ClockBuild: clockBuild, SmallFS: smallFS, SlowFS: slowFS, Tag: tag, GatewayBin: gateway, WorkDir: workdir, Seed: uint64(seed), PG: pg, DryRun: dry,
 						Log: func(f string, a ...any) { fmt.Fprintf(cmd.ErrOrStderr(), "  "+f+"\n", a...) }}
 					res := chaos.Run(ctx, opt, sc)
 					all = append(all, res)
@@ -272,7 +276,7 @@ environment) and are skipped, and said so, without it.`,
 					}
 					// --strict: a scenario that was skipped (no PostgreSQL) judged
 					// nothing, which in CI is a failure.
-					bad := res.Failed()
+					bad := res.FailsOutside(sc.Known)
 					if chaos.ExpectedToFail(sc, tag) && res.Err == "" && res.Requests > 0 {
 						bad = !res.HasFail() // a control that passes on the old release proves nothing
 					}
@@ -334,6 +338,9 @@ environment) and are skipped, and said so, without it.`,
 	f.BoolVar(&asJSON, "json", false, "print the results as JSON")
 	f.BoolVar(&strict, "strict", false, "a skipped scenario (no PostgreSQL) is a failure: for CI")
 	f.StringVar(&table, "table", "", "write the scenario x seed x invariant table (markdown) to this file")
+	f.BoolVar(&clockBuild, "clock-build", false, "the gateway is built with -tags chaosclock: the scenarios that move its clock run")
+	f.StringVar(&smallFS, "small-fs", "", "a directory on a tiny filesystem (a spool that fills up): the disk-full scenarios run")
+	f.StringVar(&slowFS, "slow-fs", "", "a directory on a filesystem with slow writes: the slow-fsync scenario runs")
 	f.StringVar(&tag, "tag", "", "the gateway release under test (vX.Y.Z): positive-control scenarios must FAIL on releases older than their ControlSince")
 	f.StringVar(&resultsFile, "results", "", "write the results as JSON to this file (input of: llmchaos merge)")
 	f.BoolVar(&dry, "check-config", false, "only generate every scenario's configuration and run the gateway's check-config on it; start nothing")

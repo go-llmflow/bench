@@ -4,7 +4,7 @@ name: controls
 # work on them; the whole campaign is chaos.yml.
 on:
   push:
-    branches: ['chaos-controls*', 'chaos-round2*']
+    branches: ['chaos-controls*', 'chaos-round2*', 'chaos-round3*']
 
 permissions:
   contents: read
@@ -23,7 +23,7 @@ jobs:
           - { set: long-smoke, scenarios: 'long-mixed-traffic --duration 12m' }
           - { set: controls, scenarios: 'idp-schac-spoof control-n-slots control-admin-users control-spare-guard control-fallback-spare control-recorder-stall control-schac-institution control-shared-scim control-dcgm-glitch' }
           - { set: hostile-net, scenarios: 'hostile-borrower-flood hostile-admin-flood hostile-fed-metrics-hammer combined-hostile-tenants idp-schac-change net-upstream-latency net-upstream-loss combined-net-loss-idp-down-disconnects combined-schac-change-and-key-rotation' }
-          - { set: pg, scenarios: 'net-replica-link-slow ha-budget-edge migrate-users-ha combined-saturation-pg-hang-replica-kill combined-partition-kill-budget-edge combined-month-close-bmc-reset-pg-slow control-spool-fair' }
+          - { set: pg, scenarios: 'net-replica-link-slow ha-budget-edge migrate-users-ha combined-saturation-pg-hang-replica-kill combined-partition-kill-budget-edge combined-month-close-bmc-reset-pg-slow control-spool-fair pg-readonly-failover' }
     services:
       postgres:
         image: postgres:17

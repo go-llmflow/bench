@@ -1,0 +1,159 @@
+name: special
+
+# The scenarios that need more than a released gateway binary and a PostgreSQL
+# service: a gateway built with -tags chaosclock (its clock moves), a spool on a
+# tiny filesystem (it fills up) and on a slow one (a delayed block device). Each
+# job runs its group's scenarios, then `llmchaos merge --group` audits that every
+# scenario x seed of the group ran and judged.
+
+on:
+  push:
+    branches: [main, 'chaos-round3*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # the gateway commit that carries the test-only clock seam (go-llmflow/gateway#173)
+  CLOCK_REF: 3945f7521299a18efcfea047c4fbf34a4b69473d
+
+jobs:
+  clock:
+    name: clock (gateway built with -tags chaosclock)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: chaos-throwaway-ci # a service container that exists for this job only
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          check-latest: true
+      - name: the gateway under test, with a movable clock
+        run: GOBIN="$GITHUB_WORKSPACE/.chaos-bin" go install -tags chaosclock "github.com/go-llmflow/gateway/cmd/llmflow-gateway@${CLOCK_REF}"
+      - name: the throwaway database's DSN, in a file
+        run: printf 'postgres://postgres:chaos-throwaway-ci@127.0.0.1:5432/postgres?sslmode=disable\n' > "$GITHUB_WORKSPACE/pg.dsn"
+      - name: a default build refuses the clock file (the seam is not in production binaries)
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/.prod-bin"
+          GOBIN="$GITHUB_WORKSPACE/.prod-bin" go install "github.com/go-llmflow/gateway/cmd/llmflow-gateway@${CLOCK_REF}"
+          printf '0\n' > "$GITHUB_WORKSPACE/clock.off"
+          if LLMFLOW_TEST_CLOCK_FILE="$GITHUB_WORKSPACE/clock.off" "$GITHUB_WORKSPACE/.prod-bin/llmflow-gateway" serve --config /nonexistent > refuse.txt 2>&1; then echo "a default build started with a clock file"; exit 1; fi
+          cat refuse.txt
+      - name: scenarios
+        run: >-
+          go run ./cmd/llmchaos run clock-month-close-with-content clock-jump-tariff-band combined-clock-jump-month-close-bmc-reset
+          --clock-build --strict --tag v0.39.0 --seed 1 --seed 2 --seed 3 --seed 4 --seed 5 --max-load 0
+          --gateway "$GITHUB_WORKSPACE/.chaos-bin/llmflow-gateway"
+          --workdir "$GITHUB_WORKSPACE/chaos-runs"
+          --pg-dsn-file "$GITHUB_WORKSPACE/pg.dsn"
+          --results "$GITHUB_WORKSPACE/results.json"
+          --table "$GITHUB_WORKSPACE/table.md" > "$GITHUB_WORKSPACE/verdicts.txt" 2>&1
+      - name: audit
+        if: always()
+        run: go run ./cmd/llmchaos merge --group clock --tag v0.39.0 --seed 1 --seed 2 --seed 3 --seed 4 --seed 5 results.json > merge.txt 2>&1
+      - name: summary
+        if: always()
+        run: cat table.md verdicts.txt merge.txt >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: special-clock
+          path: |
+            verdicts.txt
+            table.md
+            merge.txt
+            results.json
+            chaos-runs/*/evidence-seed*
+          retention-days: 30
+
+  fs:
+    name: spool filesystem gateway ${{ matrix.tag }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        # v0.38.1 loses records under a slow spool device on some loads (3253 of
+        # 3660 billed on one seed, none on two others): intermittent, so not a
+        # control (see the chaos page); the campaign runs the release that holds.
+        tag: [v0.39.0]
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: chaos-throwaway-ci # a service container that exists for this job only
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          check-latest: true
+      - name: the gateway under test
+        run: GOBIN="$GITHUB_WORKSPACE/.chaos-bin" go install "github.com/go-llmflow/gateway/cmd/llmflow-gateway@${{ matrix.tag }}"
+      - name: the throwaway database's DSN, in a file
+        run: printf 'postgres://postgres:chaos-throwaway-ci@127.0.0.1:5432/postgres?sslmode=disable\n' > "$GITHUB_WORKSPACE/pg.dsn"
+      - name: a 1 MiB filesystem for the spool
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/smallfs"
+          sudo mount -t tmpfs -o size=1m tmpfs "$GITHUB_WORKSPACE/smallfs"
+          sudo chown "$(id -u):$(id -g)" "$GITHUB_WORKSPACE/smallfs"
+          df -h "$GITHUB_WORKSPACE/smallfs"
+      - name: a filesystem whose writes take 300 ms (device-mapper delay over a loop device)
+        run: |
+          sudo modprobe dm-delay
+          truncate -s 64M "$RUNNER_TEMP/slow.img"
+          LOOP="$(sudo losetup -f --show "$RUNNER_TEMP/slow.img")"
+          SZ="$(sudo blockdev --getsz "$LOOP")"
+          echo "0 $SZ delay $LOOP 0 0 $LOOP 0 300" | sudo dmsetup create slowdev
+          sudo mkfs.ext4 -q /dev/mapper/slowdev
+          mkdir -p "$GITHUB_WORKSPACE/slowfs"
+          sudo mount /dev/mapper/slowdev "$GITHUB_WORKSPACE/slowfs"
+          sudo chown "$(id -u):$(id -g)" "$GITHUB_WORKSPACE/slowfs"
+          df -h "$GITHUB_WORKSPACE/slowfs"
+      - name: scenarios
+        run: >-
+          go run ./cmd/llmchaos run spool-disk-full spool-slow-fsync
+          --small-fs "$GITHUB_WORKSPACE/smallfs" --slow-fs "$GITHUB_WORKSPACE/slowfs"
+          --strict --tag ${{ matrix.tag }} --seed 1 --seed 2 --seed 3 --max-load 0
+          --gateway "$GITHUB_WORKSPACE/.chaos-bin/llmflow-gateway"
+          --workdir "$GITHUB_WORKSPACE/chaos-runs"
+          --pg-dsn-file "$GITHUB_WORKSPACE/pg.dsn"
+          --results "$GITHUB_WORKSPACE/results.json"
+          --table "$GITHUB_WORKSPACE/table.md" > "$GITHUB_WORKSPACE/verdicts.txt" 2>&1
+      - name: audit
+        if: always()
+        run: go run ./cmd/llmchaos merge --group fs --tag ${{ matrix.tag }} --seed 1 --seed 2 --seed 3 results.json > merge.txt 2>&1
+      - name: summary
+        if: always()
+        run: cat table.md verdicts.txt merge.txt >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: special-fs-${{ matrix.tag }}
+          path: |
+            verdicts.txt
+            table.md
+            merge.txt
+            results.json
+            chaos-runs/*/evidence-seed*
+          retention-days: 30

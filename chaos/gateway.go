@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -64,6 +65,12 @@ type Topology struct {
 	NoModelLen  bool // leave max_model_len out: learnt from /v1/models
 	// Extra HCL appended verbatim (a scenario's own settings).
 	Extra string
+	// Clock: the gateway follows a clock file (a -tags chaosclock build);
+	// ClockOffset is its starting offset.
+	Clock       bool
+	ClockOffset time.Duration
+	// SpoolDir overrides the spool's directory (a tiny filesystem).
+	SpoolDir string
 	// Tag is the gateway release under test ("" : the latest): a configuration
 	// key that a release does not know is left out for it (OrgDomains).
 	Tag string
@@ -174,11 +181,16 @@ func NewGateway(bin, dir string, t Topology) (*Gateway, error) {
 		if err := os.WriteFile(filepath.Join(dir, "pg.dsn"), []byte(t.PG+"\n"), 0o600); err != nil {
 			return nil, err
 		}
-		if err := os.MkdirAll(filepath.Join(dir, "spool"), 0o700); err != nil {
+		if err := os.MkdirAll(cmpOr(t.SpoolDir, filepath.Join(dir, "spool")), 0o700); err != nil {
 			return nil, err
 		}
 	}
 	listen, err := FreeAddr()
+	for err == nil && t.HA != nil && listen == t.HA.Listen {
+		// the kernel hands a just-freed port out again: the client and the
+		// replicas' channel must not share one (seen once in CI: gw1's check-config)
+		listen, err = FreeAddr()
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -187,7 +199,24 @@ func NewGateway(bin, dir string, t Topology) (*Gateway, error) {
 	if err := os.WriteFile(g.ConfigPath(), []byte(g.config()), 0o600); err != nil {
 		return nil, err
 	}
+	if t.Clock {
+		if err := g.SetClock(t.ClockOffset); err != nil {
+			return nil, err
+		}
+	}
 	return g, nil
+}
+
+// ClockPath is the file a -tags chaosclock gateway reads its clock offset from.
+func (g *Gateway) ClockPath() string { return filepath.Join(g.Dir, "clock") }
+
+// SetClock moves the gateway's clock to real time + off (atomically: a rename).
+func (g *Gateway) SetClock(off time.Duration) error {
+	tmp := g.ClockPath() + ".tmp"
+	if err := os.WriteFile(tmp, []byte(strconv.FormatFloat(off.Seconds(), 'f', 3, 64)+"\n"), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, g.ClockPath())
 }
 
 // ConfigPath is the HCL file.
@@ -201,7 +230,7 @@ func (g *Gateway) config() string {
 	p("listen = %q\nmaster_key_file = %q\ncache_isolation = \"org\"\ncache_salt_key_file = %q\nauth_failures_per_minute = 0\nshutdown_grace = \"2s\"\nbudget_refresh = \"1s\"\n",
 		g.Listen, filepath.Join(g.Dir, "master.key"), filepath.Join(g.Dir, "salt.key"))
 	if t.PG != "" {
-		p("store {\n  kind = \"postgres\"\n  dsn_file = %q\n  fail_closed = true\n  spool_dir = %q\n%s}\n", filepath.Join(g.Dir, "pg.dsn"), filepath.Join(g.Dir, "spool"), t.StoreExtra)
+		p("store {\n  kind = \"postgres\"\n  dsn_file = %q\n  fail_closed = true\n  spool_dir = %q\n%s}\n", filepath.Join(g.Dir, "pg.dsn"), cmpOr(t.SpoolDir, filepath.Join(g.Dir, "spool")), t.StoreExtra)
 	} else {
 		p("store {\n  kind = \"memory\"\n}\n")
 	}
@@ -329,6 +358,9 @@ func (g *Gateway) Start(wait time.Duration) error {
 		}
 	}
 	cmd := exec.Command(g.Bin, "serve", "--config", g.ConfigPath())
+	if g.topo.Clock { // a gateway built with -tags chaosclock follows this file
+		cmd.Env = append(os.Environ(), "LLMFLOW_TEST_CLOCK_FILE="+g.ClockPath())
+	}
 	g.log = &lockedBuf{}
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, g.log, g.log
 	ownGroup(cmd)
@@ -461,4 +493,11 @@ func (g *Gateway) SetBudget(kind, name string, period string, hard, soft float64
 		return fmt.Errorf("budget %s:%s: %d %s", kind, name, code, b)
 	}
 	return nil
+}
+
+func cmpOr(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
 }

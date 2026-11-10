@@ -5,15 +5,18 @@ import "time"
 // Features say which parts of the deployment a scenario builds.
 type Features struct {
 	Fluids, Federation, IdPs, BMC, Budgets bool
-	ModelsDownAtStart                      bool // /v1/models answers 503 until a fault lifts it
-	Guard                                  bool // a llama_guard guardrail on the borrower, with a counting fake guard model
-	DCGMGlitch                             bool // the GPUs have a month of lifetime energy (not counted), one scrape reads 0 (fault dcgm-glitch)
-	SharedSCIM                             bool // a SCIM client whose groups map to the teams of two organisations (etabA, etabB)
-	SchacInst                              bool // three extra JWT issuers for the institution controls (v0.39.0)
-	SpoolFair                              bool // PostgreSQL with a 1 MiB spool and generous organisation budgets
-	UpstreamNet                            bool // a relay between the gateway and the upstream (net-slow, net-loss)
-	SCIM                                   bool // a scim block (domain s.example, group "Lab Physics" on etabA's team)
-	Fallback                               bool // a second model and pool, the main model's saturation fallback
+	ModelsDownAtStart                      bool   // /v1/models answers 503 until a fault lifts it
+	Guard                                  bool   // a llama_guard guardrail on the borrower, with a counting fake guard model
+	DCGMGlitch                             bool   // the GPUs have a month of lifetime energy (not counted), one scrape reads 0 (fault dcgm-glitch)
+	SharedSCIM                             bool   // a SCIM client whose groups map to the teams of two organisations (etabA, etabB)
+	SchacInst                              bool   // three extra JWT issuers for the institution controls (v0.39.0)
+	SpoolFair                              bool   // PostgreSQL with a 1 MiB spool and generous organisation budgets
+	Clock                                  string // "": real time; the gateway's starting clock (-tags chaosclock build): "prev-month-20th" or "tariff-edge"
+	SmallFS                                bool   // the spool lives on a tiny filesystem (--small-fs), generous budgets
+	SlowFS                                 bool   // the spool lives on a filesystem whose writes are slow (--slow-fs), generous budgets
+	UpstreamNet                            bool   // a relay between the gateway and the upstream (net-slow, net-loss)
+	SCIM                                   bool   // a scim block (domain s.example, group "Lab Physics" on etabA's team)
+	Fallback                               bool   // a second model and pool, the main model's saturation fallback
 }
 
 // OrgLoad is the traffic of one organisation: Workers closed-loop clients, each
@@ -75,6 +78,11 @@ type Scenario struct {
 	// ControlSince: a positive control, which must FAIL on gateway releases
 	// older than this tag and PASS from it on (see ExpectedToFail).
 	ControlSince string
+	// Known: invariants this scenario fails because of a defect of the gateway
+	// that is filed with a reproducer (the issue, as "owner/repo#N"). The
+	// campaign keeps judging them; it fails when one of them PASSES, so that a
+	// fixed defect does not stay listed.
+	Known map[int]string
 }
 
 // rampAt is when the last owner's workers start.
