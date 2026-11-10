@@ -26,7 +26,7 @@ jobs:
           - { set: pg, scenarios: 'net-replica-link-slow ha-budget-edge migrate-users-ha combined-saturation-pg-hang-replica-kill combined-partition-kill-budget-edge combined-month-close-bmc-reset-pg-slow control-spool-fair pg-readonly-failover' }
     services:
       postgres:
-        image: postgres:17
+        image: postgres:18
         env:
           POSTGRES_PASSWORD: chaos-throwaway-ci # a service container that exists for this job only
         ports: ['5432:5432']

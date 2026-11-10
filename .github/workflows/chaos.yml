@@ -42,7 +42,7 @@ jobs:
       GATEWAY_TAG: ${{ matrix.tag }}
     services:
       postgres:
-        image: postgres:17
+        image: postgres:18
         env:
           POSTGRES_PASSWORD: chaos-throwaway-ci # a service container that exists for this job only
         ports: ['5432:5432']
