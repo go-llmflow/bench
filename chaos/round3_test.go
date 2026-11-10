@@ -1,6 +1,8 @@
 package chaos
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -135,5 +137,29 @@ func TestSnapshotCostSumsTheUsageRows(t *testing.T) {
 	}
 	if _, err := snapshotCost([]byte(`not json`)); err == nil {
 		t.Fatal("garbage is an error")
+	}
+}
+
+func TestASeedKeepsTheEvidenceOfTheEarlierOnes(t *testing.T) {
+	d := t.TempDir()
+	for _, p := range []string{"evidence-seed1/ledger.jsonl", "gw0/gateway.hcl", "evidence-seed2/x"} {
+		full := filepath.Join(d, p)
+		if err := os.MkdirAll(filepath.Dir(full), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := removeAllButEvidence(d); err != nil {
+		t.Fatal(err)
+	}
+	for p, want := range map[string]bool{"evidence-seed1/ledger.jsonl": true, "evidence-seed2/x": true, "gw0/gateway.hcl": false} {
+		if _, err := os.Stat(filepath.Join(d, p)); (err == nil) != want {
+			t.Errorf("%s kept = %v, want %v", p, err == nil, want)
+		}
+	}
+	if err := removeAllButEvidence(filepath.Join(d, "absent")); err != nil {
+		t.Fatalf("an absent directory is fine: %v", err)
 	}
 }

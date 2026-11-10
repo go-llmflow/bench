@@ -186,6 +186,11 @@ func NewGateway(bin, dir string, t Topology) (*Gateway, error) {
 		}
 	}
 	listen, err := FreeAddr()
+	for err == nil && t.HA != nil && listen == t.HA.Listen {
+		// the kernel hands a just-freed port out again: the client and the
+		// replicas' channel must not share one (seen once in CI: gw1's check-config)
+		listen, err = FreeAddr()
+	}
 	if err != nil {
 		return nil, err
 	}

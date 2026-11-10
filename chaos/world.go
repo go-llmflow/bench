@@ -126,7 +126,9 @@ func (w *World) Primary() *Gateway { return w.GW[0] }
 func Setup(ctx context.Context, opt Options, sc *Scenario) (*World, error) {
 	w := &World{Opt: opt, Sc: sc, IdPs: map[string]*IdP{}}
 	dir := filepath.Join(opt.WorkDir, sc.Name)
-	if err := os.RemoveAll(dir); err != nil {
+	// The configurations, keys and logs of an earlier run of the scenario go; the
+	// evidence of an earlier SEED stays (a failure of seed 1 was lost to seed 5).
+	if err := removeAllButEvidence(dir); err != nil {
 		return nil, err
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {

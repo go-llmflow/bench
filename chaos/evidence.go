@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // The evidence of a run is written next to its configuration, in the run's
@@ -107,4 +108,24 @@ func firstLine(s string) string {
 		}
 	}
 	return s
+}
+
+// removeAllButEvidence empties dir except the evidence-seed* directories.
+func removeAllButEvidence(dir string) error {
+	ents, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, e := range ents {
+		if strings.HasPrefix(e.Name(), "evidence-seed") {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(dir, e.Name())); err != nil {
+			return err
+		}
+	}
+	return nil
 }
