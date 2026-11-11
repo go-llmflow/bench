@@ -25,7 +25,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        tag: [v0.38.0, v0.38.1, v0.39.0]
+        tag: [v0.38.0, v0.38.1, v0.39.0, v0.45.1]
         group: [upstream, load, idp-bmc, shares-combined, ha, pg-ops, hostile, net-idp, ha2, long]
         include:
           - { group: hostile, scenarios: 'hostile-borrower-flood hostile-admin-flood hostile-fed-metrics-hammer combined-hostile-tenants' }
@@ -91,7 +91,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        tag: [v0.38.0, v0.38.1, v0.39.0]
+        tag: [v0.38.0, v0.38.1, v0.39.0, v0.45.1]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v5
@@ -138,7 +138,8 @@ jobs:
       - name: diff
         run: >-
           go run ./cmd/llmchaos diff evidence/chaos-evidence-v0.38.0/chaos-results.json evidence/chaos-evidence-v0.38.1/chaos-results.json > chaos-diff.txt 2>&1;
-          go run ./cmd/llmchaos diff evidence/chaos-evidence-v0.38.1/chaos-results.json evidence/chaos-evidence-v0.39.0/chaos-results.json >> chaos-diff.txt 2>&1
+          go run ./cmd/llmchaos diff evidence/chaos-evidence-v0.38.1/chaos-results.json evidence/chaos-evidence-v0.39.0/chaos-results.json >> chaos-diff.txt 2>&1;
+          go run ./cmd/llmchaos diff evidence/chaos-evidence-v0.39.0/chaos-results.json evidence/chaos-evidence-v0.45.1/chaos-results.json >> chaos-diff.txt 2>&1
       - name: summary
         if: always()
         run: cat chaos-diff.txt >> "$GITHUB_STEP_SUMMARY"

@@ -17,7 +17,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        tag: [v0.38.0, v0.38.1, v0.39.0]
+        tag: [v0.38.0, v0.38.1, v0.39.0, v0.45.1]
         set: [controls, hostile-net, pg, long-smoke]
         include:
           - { set: long-smoke, scenarios: 'long-mixed-traffic --duration 12m' }
