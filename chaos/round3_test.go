@@ -108,6 +108,13 @@ func TestAKnownDefectIsJudgedAndNeverHidden(t *testing.T) {
 		t.Fatalf("clock-jump-tariff-band lists a known defect: %v (gateway#175 is fixed)", sc.Known)
 	}
 	sc.Known = map[int]string{4: "go-llmflow/gateway#175"}
+	defer func(f func(string) *Scenario) { findScenario = f }(findScenario)
+	findScenario = func(name string) *Scenario {
+		if name == sc.Name {
+			return sc
+		}
+		return Find(name)
+	}
 	mk := func(st Status) []Result {
 		vs := fullVerdicts(sc)
 		vs[3].Status = st
