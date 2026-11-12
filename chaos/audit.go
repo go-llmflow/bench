@@ -50,6 +50,10 @@ func GroupOf(sc *Scenario) string {
 	return ""
 }
 
+// findScenario is Find; a test replaces it to give a scenario a known defect,
+// since the catalogue lists none once they are fixed.
+var findScenario = Find
+
 // AuditGroup is Audit for the scenarios of one group.
 func AuditGroup(rs []Result, seeds []int, group string) []string {
 	var out []string
@@ -71,7 +75,7 @@ func AuditGroup(rs []Result, seeds []int, group string) []string {
 			out = append(out, key+": sent no request")
 			continue
 		}
-		sc := Find(r.Scenario)
+		sc := findScenario(r.Scenario)
 		if sc == nil {
 			out = append(out, key+": not in the catalogue")
 			continue

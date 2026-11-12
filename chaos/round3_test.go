@@ -102,9 +102,18 @@ func TestEachGroupIsAuditedOnItsOwnScenarios(t *testing.T) {
 }
 
 func TestAKnownDefectIsJudgedAndNeverHidden(t *testing.T) {
+	// no scenario lists a defect today: the mechanism is tried on a scenario given one
 	sc := Find("clock-jump-tariff-band")
-	if sc.Known[4] == "" {
-		t.Fatal("the scenario lists its filed defect")
+	if len(sc.Known) != 0 {
+		t.Fatalf("clock-jump-tariff-band lists a known defect: %v (gateway#175 is fixed)", sc.Known)
+	}
+	sc.Known = map[int]string{4: "go-llmflow/gateway#175"}
+	defer func(f func(string) *Scenario) { findScenario = f }(findScenario)
+	findScenario = func(name string) *Scenario {
+		if name == sc.Name {
+			return sc
+		}
+		return Find(name)
 	}
 	mk := func(st Status) []Result {
 		vs := fullVerdicts(sc)

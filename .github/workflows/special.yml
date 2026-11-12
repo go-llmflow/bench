@@ -17,8 +17,8 @@ permissions:
   contents: read
 
 env:
-  # the gateway commit that carries the test-only clock seam (go-llmflow/gateway#173)
-  CLOCK_REF: 3945f7521299a18efcfea047c4fbf34a4b69473d
+  # the gateway release that carries the test-only clock seam (go-llmflow/gateway#173) and the fix of #175
+  CLOCK_REF: v0.45.1
 
 jobs:
   clock:
@@ -56,7 +56,7 @@ jobs:
       - name: scenarios
         run: >-
           go run ./cmd/llmchaos run clock-month-close-with-content clock-jump-tariff-band combined-clock-jump-month-close-bmc-reset
-          --clock-build --strict --tag v0.39.0 --seed 1 --seed 2 --seed 3 --seed 4 --seed 5 --max-load 0
+          --clock-build --strict --tag v0.45.1 --seed 1 --seed 2 --seed 3 --seed 4 --seed 5 --max-load 0
           --gateway "$GITHUB_WORKSPACE/.chaos-bin/llmflow-gateway"
           --workdir "$GITHUB_WORKSPACE/chaos-runs"
           --pg-dsn-file "$GITHUB_WORKSPACE/pg.dsn"
@@ -64,7 +64,7 @@ jobs:
           --table "$GITHUB_WORKSPACE/table.md" > "$GITHUB_WORKSPACE/verdicts.txt" 2>&1
       - name: audit
         if: always()
-        run: go run ./cmd/llmchaos merge --group clock --tag v0.39.0 --seed 1 --seed 2 --seed 3 --seed 4 --seed 5 results.json > merge.txt 2>&1
+        run: go run ./cmd/llmchaos merge --group clock --tag v0.45.1 --seed 1 --seed 2 --seed 3 --seed 4 --seed 5 results.json > merge.txt 2>&1
       - name: summary
         if: always()
         run: cat table.md verdicts.txt merge.txt >> "$GITHUB_STEP_SUMMARY"
