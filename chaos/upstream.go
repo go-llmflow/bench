@@ -2,6 +2,7 @@ package chaos
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -51,6 +52,10 @@ type Seen struct {
 	// Priority is the vLLM priority the gateway sent (noPriority: none).
 	Priority int
 	N        int
+	// Ended is when the handler returned; Gone when its request's context ended
+	// (the connection closed or the client left), zero while it has not.
+	Ended time.Time
+	Gone  time.Time
 }
 
 const noPriority = -1 << 30
@@ -73,9 +78,38 @@ type Upstream struct {
 	models atomic.Int64 // GET /v1/models answered
 	gets   atomic.Int64 // GET /v1/models received
 	sch    *sched
+	tag    string // the run's marker tag, when known
 }
 
 var markerRE = regexp.MustCompile(`MK([A-Za-z0-9]+)-([A-Za-z0-9]+)-([0-9]+)`)
+
+// findMarker is the harness's marker of a request: the one in the messages the
+// harness wrote, and only if there is none there the first in the whole body. A
+// body holds more than the prompt (a user id, a key or a cache key the gateway
+// adds), and the first lookalike of the marker in a random identifier made a
+// whole organisation's requests vanish from the join (bench#31: 200 answers of
+// one key witnessed under another "organisation" for a whole seed).
+//
+// When the run's tag is known (SetRunTag) the marker must carry it, which no
+// random identifier does by chance.
+func (u *Upstream) findMarker(messages, body []byte) []byte {
+	if u.tag != "" {
+		re := regexp.MustCompile(`MK[A-Za-z0-9]+-` + regexp.QuoteMeta(u.tag) + `-[0-9]+`)
+		if m := re.Find(messages); m != nil {
+			return m
+		}
+		if m := re.Find(body); m != nil {
+			return m
+		}
+	}
+	if m := markerRE.Find(messages); m != nil {
+		return m
+	}
+	return markerRE.Find(body)
+}
+
+// SetRunTag tells the fake the tag of the run's markers (MK<org>-<tag>-<id>).
+func (u *Upstream) SetRunTag(tag string) { u.tag = tag }
 
 // NewUpstream starts the fake. generate is the completion tokens a request
 // wants (vLLM stops at max_tokens).
@@ -186,7 +220,7 @@ func (u *Upstream) serve(w http.ResponseWriter, r *http.Request) {
 	if req.N != nil {
 		s.N = *req.N
 	}
-	if m := markerRE.Find(body); m != nil {
+	if m := u.findMarker(req.Messages, body); m != nil {
 		s.Marker = string(m)
 		if sm := markerRE.FindSubmatch(m); sm != nil {
 			s.Org = string(sm[1])
@@ -213,6 +247,20 @@ func (u *Upstream) serve(w http.ResponseWriter, r *http.Request) {
 	u.seen[key] = s
 	u.order = append(u.order, key)
 	u.mu.Unlock()
+	// When the connection went away (the client closed it, or its process was
+	// killed) and when the handler returned: a request of a killed replica stays
+	// counted in flight until its handler notices, which is not an admission.
+	stop := context.AfterFunc(r.Context(), func() {
+		u.note(s, func(s *Seen) {
+			if s.Gone.IsZero() {
+				s.Gone = time.Now()
+			}
+		})
+	})
+	defer func() {
+		stop()
+		u.note(s, func(s *Seen) { s.Ended = time.Now() })
+	}()
 	if u.sch != nil {
 		prio := 0
 		if v, err := strconv.Atoi(r.Header.Get("X-Vllm-Priority")); err == nil {

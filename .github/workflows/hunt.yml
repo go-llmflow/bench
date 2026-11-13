@@ -1,0 +1,88 @@
+name: hunt
+
+# gateway#180: 9 requests in flight at the upstream for a capacity of 8, once in 15
+# runs of combined-saturation-pg-hang-replica-kill on v0.38.1, with no evidence kept.
+# This runs the scenario on 200 seeds (1001-1200) of v0.38.1 and of v0.45.1, with the
+# evidence of every seed kept in the job's workdir (uploaded when a seed fails). The
+# verdicts say, per sighting, how many of the requests counted in flight were already
+# abandoned by their connection (a killed replica's) and how many were admissions.
+
+on:
+  pull_request:
+    branches: [main]
+    paths: ['.github/workflows/hunt.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  hunt:
+    name: hunt ${{ matrix.tag }} seeds ${{ matrix.shard }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        tag: [v0.38.1, v0.45.1]
+        include:
+          - { shard: s0, seeds: '1001,1002,1003,1004,1005,1006,1007,1008,1009,1010,1011,1012,1013,1014,1015,1016,1017,1018,1019,1020' }
+          - { shard: s1, seeds: '1021,1022,1023,1024,1025,1026,1027,1028,1029,1030,1031,1032,1033,1034,1035,1036,1037,1038,1039,1040' }
+          - { shard: s2, seeds: '1041,1042,1043,1044,1045,1046,1047,1048,1049,1050,1051,1052,1053,1054,1055,1056,1057,1058,1059,1060' }
+          - { shard: s3, seeds: '1061,1062,1063,1064,1065,1066,1067,1068,1069,1070,1071,1072,1073,1074,1075,1076,1077,1078,1079,1080' }
+          - { shard: s4, seeds: '1081,1082,1083,1084,1085,1086,1087,1088,1089,1090,1091,1092,1093,1094,1095,1096,1097,1098,1099,1100' }
+          - { shard: s5, seeds: '1101,1102,1103,1104,1105,1106,1107,1108,1109,1110,1111,1112,1113,1114,1115,1116,1117,1118,1119,1120' }
+          - { shard: s6, seeds: '1121,1122,1123,1124,1125,1126,1127,1128,1129,1130,1131,1132,1133,1134,1135,1136,1137,1138,1139,1140' }
+          - { shard: s7, seeds: '1141,1142,1143,1144,1145,1146,1147,1148,1149,1150,1151,1152,1153,1154,1155,1156,1157,1158,1159,1160' }
+          - { shard: s8, seeds: '1161,1162,1163,1164,1165,1166,1167,1168,1169,1170,1171,1172,1173,1174,1175,1176,1177,1178,1179,1180' }
+          - { shard: s9, seeds: '1181,1182,1183,1184,1185,1186,1187,1188,1189,1190,1191,1192,1193,1194,1195,1196,1197,1198,1199,1200' }
+        shard: [s0, s1, s2, s3, s4, s5, s6, s7, s8, s9]
+    env:
+      GATEWAY_TAG: ${{ matrix.tag }}
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: chaos-throwaway-ci # a service container that exists for this job only
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          check-latest: true
+      - name: the gateway under test
+        run: GOBIN="$GITHUB_WORKSPACE/.chaos-bin" go install "github.com/go-llmflow/gateway/cmd/llmflow-gateway@${GATEWAY_TAG}"
+      - name: the throwaway database's DSN, in a file
+        run: printf 'postgres://postgres:chaos-throwaway-ci@127.0.0.1:5432/postgres?sslmode=disable\n' > "$GITHUB_WORKSPACE/pg.dsn"
+      - name: the scenario, 20 seeds
+        run: >-
+          go run ./cmd/llmchaos run combined-saturation-pg-hang-replica-kill --tag "${GATEWAY_TAG}" --seed ${{ matrix.seeds }} --max-load 0
+          --gateway "$GITHUB_WORKSPACE/.chaos-bin/llmflow-gateway"
+          --workdir "$GITHUB_WORKSPACE/chaos-runs"
+          --pg-dsn-file "$GITHUB_WORKSPACE/pg.dsn"
+          --results "$GITHUB_WORKSPACE/results.json"
+          --table "$GITHUB_WORKSPACE/table.md" > "$GITHUB_WORKSPACE/verdicts.txt" 2>&1
+      - name: summary
+        if: always()
+        run: cat table.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hunt-${{ matrix.tag }}-${{ matrix.shard }}
+          path: |
+            verdicts.txt
+            table.md
+            results.json
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: hunt-evidence-${{ matrix.tag }}-${{ matrix.shard }}
+          path: chaos-runs/*/evidence-seed*
+          retention-days: 30
