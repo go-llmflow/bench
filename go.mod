@@ -1,15 +1,15 @@
 module github.com/go-llmflow/bench
 
-go 1.27.3
+go 1.27.4
 
 require (
 	github.com/go-authn/oidc v0.7.0
-	github.com/go-authn/saml v0.5.1
-	github.com/go-fleettools/fleettools v0.72.0
-	github.com/go-redfish/redfish v0.9.0
+	github.com/go-authn/saml v0.6.1
+	github.com/go-fleettools/fleettools v0.111.0
+	github.com/go-redfish/redfish v0.15.0
 	github.com/jackc/pgx/v5 v5.12.0
 	github.com/spf13/cobra v1.10.2
-	golang.org/x/crypto v0.58.0
+	golang.org/x/crypto v0.59.0
 )
 
 require (
@@ -20,5 +20,5 @@ require (
 	github.com/jonboulle/clockwork v0.5.0 // indirect
 	github.com/russellhaering/goxmldsig v1.6.1 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
-	golang.org/x/text v0.43.0 // indirect
+	golang.org/x/text v0.44.0 // indirect
 )
