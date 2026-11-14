@@ -66,6 +66,17 @@ func Judge(ctx context.Context, w *World) []Verdict {
 		out = append(out, i.fn(w, j))
 	}
 	w.checkGatewayFDs()
+	// The join is only as good as the witness. When the upstream holds witnesses
+	// that no client request explains, the join cannot place the requests it
+	// stands for, and invariants 1 to 3 would be judged against too little: say so
+	// instead of passing or failing the gateway on it (bench#31).
+	if o := j.orphans(); len(o) > 0 {
+		for i, v := range out {
+			if v.N <= 3 && v.Status != NA {
+				out[i] = verdict(v.N, Fail, "WITNESS INCOMPLETE, not a verdict on the gateway: the upstream witnessed %d requests whose marker no client request carries (first: %s, org %q), so the join cannot place the answers they stand for; the gateway's figure was %s: %s", len(o), o[0].Marker, o[0].Org, v.Status, v.Detail)
+			}
+		}
+	}
 	return out
 }
 
@@ -94,6 +105,20 @@ type jreq struct {
 type join struct {
 	Reqs  []*jreq
 	ByOrg map[string][]*jreq
+	// Unplaced are the witnesses with a marker that no ledger entry carries.
+	Unplaced []Seen
+}
+
+// orphans returns the witnesses no client request explains. The harness's own
+// probes (MKprobe-...) are not in the ledger and are not orphans.
+func (j *join) orphans() []Seen {
+	var out []Seen
+	for _, s := range j.Unplaced {
+		if s.Org != "probe" {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // lowestBand is the vLLM priority of the last band: BorrowBase 10 + RankStep 10
@@ -168,6 +193,15 @@ func newJoin(w *World) *join {
 		}
 		j.Reqs = append(j.Reqs, r)
 		j.ByOrg[o.Org] = append(j.ByOrg[o.Org], r)
+	}
+	known := map[string]bool{}
+	for _, o := range w.Ledger.All() {
+		known[o.Marker] = true
+	}
+	for m, hs := range hits {
+		if m != "" && !known[m] {
+			j.Unplaced = append(j.Unplaced, hs...)
+		}
 	}
 	return j
 }
@@ -430,10 +464,26 @@ func inv3(w *World, j *join) Verdict {
 	var worst int
 	var ownerMaxPrio, tiersMinPrio = noPriority, 1 << 30
 	degraded := 0
-	for _, s := range w.Up.Seen() {
+	seen := w.Up.Seen()
+	zombieNote := ""
+	for _, s := range seen {
 		if s.Org == Borrower {
 			tiersHits++
 			if s.Concurrent > PoolCapacity {
+				// The upstream's counter holds every request whose handler has not
+				// returned, including those of a replica that was killed: their
+				// connection is gone (Gone before this request started) but the
+				// handler still runs (Ended after). They are not admissions.
+				z := 0
+				for _, o := range seen {
+					if !o.Gone.IsZero() && o.Gone.Before(s.Started) && o.Ended.After(o.Gone) && o.Ended.After(s.Started) {
+						z++
+					}
+				}
+				if s.Concurrent-z <= PoolCapacity {
+					zombieNote += fmt.Sprintf(" [%s counted %d in flight, %d of them already abandoned by their connection: not an admission over the pool]", s.Marker, s.Concurrent, z)
+					continue
+				}
 				over++
 				worst = max(worst, s.Concurrent)
 			}
@@ -499,7 +549,7 @@ func inv3(w *World, j *join) Verdict {
 			prio += "; " + detail
 		}
 	}
-	detail := fmt.Sprintf("borrower upstream hits %d, max concurrency %d/%d, %s%s", tiersHits, w.Up.MaxInFlight(), PoolCapacity, prio, degradedNote)
+	detail := fmt.Sprintf("borrower upstream hits %d, max concurrency %d/%d, %s%s", tiersHits, w.Up.MaxInFlight(), PoolCapacity, prio, degradedNote+zombieNote)
 	if w.expects("owner-shares") && w.Sc.PrioritySlots == 0 {
 		detail += "; owner shares NOT judged: this scenario's upstream has no priority queue"
 	} else if w.expects("owner-shares") {

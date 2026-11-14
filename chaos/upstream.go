@@ -2,6 +2,7 @@ package chaos
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -51,6 +52,12 @@ type Seen struct {
 	// Priority is the vLLM priority the gateway sent (noPriority: none).
 	Priority int
 	N        int
+	// Ended is when the handler returned; Gone when its request's context ended
+	// (the connection closed or the client left), zero while it has not.
+	Ended time.Time
+	Gone  time.Time
+	// Done is when the last event of a stream was written (zero otherwise).
+	Done time.Time
 }
 
 const noPriority = -1 << 30
@@ -73,9 +80,38 @@ type Upstream struct {
 	models atomic.Int64 // GET /v1/models answered
 	gets   atomic.Int64 // GET /v1/models received
 	sch    *sched
+	tag    string // the run's marker tag, when known
 }
 
 var markerRE = regexp.MustCompile(`MK([A-Za-z0-9]+)-([A-Za-z0-9]+)-([0-9]+)`)
+
+// findMarker is the harness's marker of a request: the one in the messages the
+// harness wrote, and only if there is none there the first in the whole body. A
+// body holds more than the prompt (a user id, a key or a cache key the gateway
+// adds), and the first lookalike of the marker in a random identifier made a
+// whole organisation's requests vanish from the join (bench#31: 200 answers of
+// one key witnessed under another "organisation" for a whole seed).
+//
+// When the run's tag is known (SetRunTag) the marker must carry it, which no
+// random identifier does by chance.
+func (u *Upstream) findMarker(messages, body []byte) []byte {
+	if u.tag != "" {
+		re := regexp.MustCompile(`MK[A-Za-z0-9]+-` + regexp.QuoteMeta(u.tag) + `-[0-9]+`)
+		if m := re.Find(messages); m != nil {
+			return m
+		}
+		if m := re.Find(body); m != nil {
+			return m
+		}
+	}
+	if m := markerRE.Find(messages); m != nil {
+		return m
+	}
+	return markerRE.Find(body)
+}
+
+// SetRunTag tells the fake the tag of the run's markers (MK<org>-<tag>-<id>).
+func (u *Upstream) SetRunTag(tag string) { u.tag = tag }
 
 // NewUpstream starts the fake. generate is the completion tokens a request
 // wants (vLLM stops at max_tokens).
@@ -186,7 +222,7 @@ func (u *Upstream) serve(w http.ResponseWriter, r *http.Request) {
 	if req.N != nil {
 		s.N = *req.N
 	}
-	if m := markerRE.Find(body); m != nil {
+	if m := u.findMarker(req.Messages, body); m != nil {
 		s.Marker = string(m)
 		if sm := markerRE.FindSubmatch(m); sm != nil {
 			s.Org = string(sm[1])
@@ -198,7 +234,14 @@ func (u *Upstream) serve(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	cur := u.inFl.Add(1)
-	defer u.inFl.Add(-1)
+	// A request is in flight until its handler returns, or, for a stream, until
+	// its last event ([DONE]) has been written: the work is done then, and the
+	// gateway frees the slot on that event, before the handler's own epilogue has
+	// run (gateway#180: 11 requests "in flight" within 1.5 ms, each over 0 to 3 ms
+	// later, with none abandoned, is that gap, not 11 admissions).
+	var relOnce sync.Once
+	release := func() { relOnce.Do(func() { u.inFl.Add(-1) }) }
+	defer release()
 	for {
 		old := u.maxFl.Load()
 		if cur <= old || u.maxFl.CompareAndSwap(old, cur) {
@@ -213,6 +256,20 @@ func (u *Upstream) serve(w http.ResponseWriter, r *http.Request) {
 	u.seen[key] = s
 	u.order = append(u.order, key)
 	u.mu.Unlock()
+	// When the connection went away (the client closed it, or its process was
+	// killed) and when the handler returned: a request of a killed replica stays
+	// counted in flight until its handler notices, which is not an admission.
+	stop := context.AfterFunc(r.Context(), func() {
+		u.note(s, func(s *Seen) {
+			if s.Gone.IsZero() {
+				s.Gone = time.Now()
+			}
+		})
+	})
+	defer func() {
+		stop()
+		u.note(s, func(s *Seen) { s.Ended = time.Now() })
+	}()
 	if u.sch != nil {
 		prio := 0
 		if v, err := strconv.Atoi(r.Header.Get("X-Vllm-Priority")); err == nil {
@@ -248,7 +305,7 @@ func (u *Upstream) serve(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, `{"error":{"message":"chaos: upstream failure","type":"server_error"}}`)
 		return
 	}
-	fw := &faultWriter{ResponseWriter: w, u: u, s: s, f: f, ctx: r.Context()}
+	fw := &faultWriter{ResponseWriter: w, u: u, s: s, f: f, ctx: r.Context(), release: release}
 	defer func() {
 		if rec := recover(); rec != nil {
 			u.note(s, func(s *Seen) { s.Cut = true })
@@ -262,15 +319,17 @@ func (u *Upstream) serve(w http.ResponseWriter, r *http.Request) {
 // faultWriter applies the stream faults and records the usage that leaves.
 type faultWriter struct {
 	http.ResponseWriter
-	u      *Upstream
-	s      *Seen
-	f      UpstreamFaults
-	ctx    interface{ Done() <-chan struct{} }
-	buf    bytes.Buffer // JSON answers are held, to rewrite their usage
-	sse    bool
-	events int
-	hdr    bool
-	line   bytes.Buffer
+	u   *Upstream
+	s   *Seen
+	f   UpstreamFaults
+	ctx interface{ Done() <-chan struct{} }
+	// release takes the request out of the in-flight count (once).
+	release func()
+	buf     bytes.Buffer // JSON answers are held, to rewrite their usage
+	sse     bool
+	events  int
+	hdr     bool
+	line    bytes.Buffer
 }
 
 func (w *faultWriter) WriteHeader(code int) {
@@ -343,6 +402,10 @@ func (w *faultWriter) event(ev []byte) error {
 		f.Flush()
 	}
 	w.events++
+	if bytes.Contains(ev, []byte("data: [DONE]")) {
+		w.release()
+		w.u.note(w.s, func(s *Seen) { s.Done = time.Now() })
+	}
 	if w.f.CutAfter > 0 && w.events >= w.f.CutAfter {
 		w.u.note(w.s, func(s *Seen) { s.Cut = true })
 		panic(http.ErrAbortHandler)
