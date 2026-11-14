@@ -394,6 +394,14 @@ func (w *faultWriter) event(ev []byte) error {
 			return nil
 		}
 	}
+	// The request leaves the in-flight count BEFORE the event that ends it is
+	// visible: the usage chunk or [DONE]. The gateway frees its slot on seeing it
+	// and may admit the next request at once; counting this one until the handler
+	// returns is a lag of the counter, not an admission (gateway#180).
+	done := bytes.Contains(ev, []byte("data: [DONE]"))
+	if done || bytes.Contains(ev, []byte(`"usage"`)) {
+		w.release()
+	}
 	if _, err := w.ResponseWriter.Write(ev); err != nil {
 		w.u.note(w.s, func(s *Seen) { s.ClientGone = true })
 		return err
@@ -402,8 +410,7 @@ func (w *faultWriter) event(ev []byte) error {
 		f.Flush()
 	}
 	w.events++
-	if bytes.Contains(ev, []byte("data: [DONE]")) {
-		w.release()
+	if done {
 		w.u.note(w.s, func(s *Seen) { s.Done = time.Now() })
 	}
 	if w.f.CutAfter > 0 && w.events >= w.f.CutAfter {
