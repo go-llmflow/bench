@@ -56,6 +56,8 @@ type Seen struct {
 	// (the connection closed or the client left), zero while it has not.
 	Ended time.Time
 	Gone  time.Time
+	// Done is when the last event of a stream was written (zero otherwise).
+	Done time.Time
 }
 
 const noPriority = -1 << 30
@@ -232,7 +234,14 @@ func (u *Upstream) serve(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	cur := u.inFl.Add(1)
-	defer u.inFl.Add(-1)
+	// A request is in flight until its handler returns, or, for a stream, until
+	// its last event ([DONE]) has been written: the work is done then, and the
+	// gateway frees the slot on that event, before the handler's own epilogue has
+	// run (gateway#180: 11 requests "in flight" within 1.5 ms, each over 0 to 3 ms
+	// later, with none abandoned, is that gap, not 11 admissions).
+	var relOnce sync.Once
+	release := func() { relOnce.Do(func() { u.inFl.Add(-1) }) }
+	defer release()
 	for {
 		old := u.maxFl.Load()
 		if cur <= old || u.maxFl.CompareAndSwap(old, cur) {
@@ -296,7 +305,7 @@ func (u *Upstream) serve(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, `{"error":{"message":"chaos: upstream failure","type":"server_error"}}`)
 		return
 	}
-	fw := &faultWriter{ResponseWriter: w, u: u, s: s, f: f, ctx: r.Context()}
+	fw := &faultWriter{ResponseWriter: w, u: u, s: s, f: f, ctx: r.Context(), release: release}
 	defer func() {
 		if rec := recover(); rec != nil {
 			u.note(s, func(s *Seen) { s.Cut = true })
@@ -310,15 +319,17 @@ func (u *Upstream) serve(w http.ResponseWriter, r *http.Request) {
 // faultWriter applies the stream faults and records the usage that leaves.
 type faultWriter struct {
 	http.ResponseWriter
-	u      *Upstream
-	s      *Seen
-	f      UpstreamFaults
-	ctx    interface{ Done() <-chan struct{} }
-	buf    bytes.Buffer // JSON answers are held, to rewrite their usage
-	sse    bool
-	events int
-	hdr    bool
-	line   bytes.Buffer
+	u   *Upstream
+	s   *Seen
+	f   UpstreamFaults
+	ctx interface{ Done() <-chan struct{} }
+	// release takes the request out of the in-flight count (once).
+	release func()
+	buf     bytes.Buffer // JSON answers are held, to rewrite their usage
+	sse     bool
+	events  int
+	hdr     bool
+	line    bytes.Buffer
 }
 
 func (w *faultWriter) WriteHeader(code int) {
@@ -391,6 +402,10 @@ func (w *faultWriter) event(ev []byte) error {
 		f.Flush()
 	}
 	w.events++
+	if bytes.Contains(ev, []byte("data: [DONE]")) {
+		w.release()
+		w.u.note(w.s, func(s *Seen) { s.Done = time.Now() })
+	}
 	if w.f.CutAfter > 0 && w.events >= w.f.CutAfter {
 		w.u.note(w.s, func(s *Seen) { s.Cut = true })
 		panic(http.ErrAbortHandler)
