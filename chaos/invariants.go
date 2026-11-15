@@ -459,52 +459,53 @@ func capList(v []string, n int) []string {
 
 // ---- invariant 3: the spare borrower and the owners' shares ----
 
-// admissionWindow is how long before a borrower's request reached the upstream
-// an owner's may have been admitted after the borrower's own admission: the
-// gateway's admission, a guard call or a forward between replicas, and the
-// upstream's accept. The sightings of gateway#180 are 0.1 to 1.6 ms.
-const admissionWindow = 25 * time.Millisecond
+func unjudgedNote(n, of int) string {
+	if n == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" [admission-time check NOT judged on %d of %d borrower requests: the gateway did not tell the upstream when it admitted them (X-Llmflow-Admitted-At, from v0.45.2)]", n, of)
+}
 
 func inv3(w *World, j *join) Verdict {
-	var tiersHits, over int
+	var tiersHits, over, unjudged int
 	var worst int
 	var ownerMaxPrio, tiersMinPrio = noPriority, 1 << 30
 	degraded := 0
 	seen := w.Up.Seen()
-	zombieNote := ""
+	// The pool's guarantee for a spare-only borrower: it takes a slot only if the
+	// pool has room when it is ADMITTED. The owners are never refused (their
+	// requests queue by priority at the engine), so the number in flight at the
+	// upstream may pass the pool because of them, before or after the borrower, and
+	// that is not judged. What is judged is the instant of the admission, as the
+	// gateway tells the upstream (X-Llmflow-Admitted-At): the requests then in
+	// flight at the upstream (started, not yet out of its count, connection not
+	// abandoned) plus the slots the borrower asks for must fit the pool. The
+	// upstream sees at most what the gateway counts, so a violation here is one.
 	for _, s := range seen {
-		if s.Org == Borrower {
-			tiersHits++
-			if s.Concurrent > PoolCapacity {
-				// The upstream's counter holds every request whose handler has not
-				// returned, including those of a replica that was killed: their
-				// connection is gone (Gone before this request started) but the
-				// handler still runs (Ended after). They are not admissions.
-				z, ob := 0, 0
-				for _, o := range seen {
-					if o.Marker == s.Marker || o.Started.After(s.Started) || !(o.Ended.IsZero() || o.Ended.After(s.Started)) {
-						continue
-					}
-					// An owner's request admitted just after the borrower's own
-					// admission may reach the upstream before it (gateway#180): the
-					// borrower takes a slot only if the pool has room when it is
-					// ADMITTED, atomically (ha.TestSpareOnlyAdmissionIsOneStepAcrossReplicas),
-					// and the owners are never refused (they queue by priority at the
-					// engine), so the total may pass the pool without an admission over it.
-					switch {
-					case !o.Gone.IsZero() && o.Gone.Before(s.Started):
-						z++
-					case o.Org != Borrower && s.Started.Sub(o.Started) < admissionWindow:
-						ob++
-					}
-				}
-				if s.Concurrent-z-ob <= PoolCapacity {
-					zombieNote += fmt.Sprintf(" [%s counted %d in flight: %d abandoned by their connection, %d owner requests that arrived within %s before it: not an admission over the pool]", s.Marker, s.Concurrent, z, ob, admissionWindow)
-					continue
-				}
-				over++
-				worst = max(worst, s.Concurrent)
+		if s.Org != Borrower {
+			continue
+		}
+		tiersHits++
+		if s.AdmittedAt.IsZero() {
+			unjudged++
+			continue
+		}
+		busy := 0
+		for _, o := range seen {
+			if o.Marker == s.Marker || !o.Started.Before(s.AdmittedAt) {
+				continue
 			}
+			if !o.Freed.IsZero() && !o.Freed.After(s.AdmittedAt) {
+				continue
+			}
+			if !o.Gone.IsZero() && o.Gone.Before(s.AdmittedAt) {
+				continue // its connection was gone: a killed replica's leftover
+			}
+			busy++
+		}
+		if busy+max(1, s.N) > PoolCapacity {
+			over++
+			worst = max(worst, busy+max(1, s.N))
 		}
 	}
 	// the band each admitted request ran in is the gateway's X-Llmflow-Priority
@@ -533,7 +534,7 @@ func inv3(w *World, j *join) Verdict {
 	}
 	var problems []string
 	if over > 0 {
-		problems = append(problems, fmt.Sprintf("%d borrower requests reached the upstream while %d were in flight (capacity %d)", over, worst, PoolCapacity))
+		problems = append(problems, fmt.Sprintf("%d borrower requests were admitted into a pool that held %d requests in flight at the upstream with the slots they asked for (capacity %d)", over, worst, PoolCapacity))
 	}
 	if tiersMinPrio != 1<<30 && ownerMaxPrio != noPriority && tiersMinPrio <= ownerMaxPrio {
 		problems = append(problems, fmt.Sprintf("a borrower request ran at priority %d, an owner's at %d: the borrower is not in the last band", tiersMinPrio, ownerMaxPrio))
@@ -567,7 +568,7 @@ func inv3(w *World, j *join) Verdict {
 			prio += "; " + detail
 		}
 	}
-	detail := fmt.Sprintf("borrower upstream hits %d, max concurrency %d/%d, %s%s", tiersHits, w.Up.MaxInFlight(), PoolCapacity, prio, degradedNote+zombieNote)
+	detail := fmt.Sprintf("borrower upstream hits %d, max concurrency %d/%d, %s%s", tiersHits, w.Up.MaxInFlight(), PoolCapacity, prio, degradedNote+unjudgedNote(unjudged, tiersHits))
 	if w.expects("owner-shares") && w.Sc.PrioritySlots == 0 {
 		detail += "; owner shares NOT judged: this scenario's upstream has no priority queue"
 	} else if w.expects("owner-shares") {
