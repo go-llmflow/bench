@@ -135,3 +135,17 @@ func TestWithoutTheAdmissionInstantTheConcurrencyIsNotJudgedAndSaysSo(t *testing
 		t.Fatalf("%s %s", v.Status, v.Detail)
 	}
 }
+
+// The witness of invariant 3 is asked of the releases that have it (v0.45.2) and
+// only of them: an older release refuses an attribute it does not know.
+func TestTheAdmissionWitnessIsAskedOnlyOfReleasesThatHaveIt(t *testing.T) {
+	for _, c := range []struct {
+		tag  string
+		want bool
+	}{{"v0.45.2", true}, {"v0.46.0", true}, {"v0.45.1", false}, {"v0.39.0", false}, {"", false}} {
+		g := &Gateway{topo: Topology{Tag: c.tag}}
+		if got := strings.Contains(g.config(), "admitted_header = true"); got != c.want {
+			t.Errorf("tag %q: admitted_header asked = %v, want %v", c.tag, got, c.want)
+		}
+	}
+}
