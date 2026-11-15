@@ -244,6 +244,9 @@ func (g *Gateway) config() string {
 	p("health {\n  path = \"/health\"\n  interval = \"1s\"\n  timeout = \"1s\"\n  cooldown = \"1s\"\n}\n")
 	p("limits {\n  upstream_header_timeout = \"6s\"\n}\n")
 	p("budgets {\n  grant_idle = \"1s\"\n}\n")
+	if TagAtLeast(t.Tag, "v0.45.2") && t.Tag != "" { // the witness of invariant 3 (gateway#180), from v0.45.2
+		p("fairshare {\n  admitted_header = true\n}\n")
+	}
 	for _, o := range Owners {
 		dom := ""
 		if d := t.OrgDomains[o]; len(d) > 0 && TagAtLeast(t.Tag, "v0.39.0") { // org { domains } exists from v0.39.0

@@ -3,6 +3,7 @@ package chaos
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -66,26 +67,85 @@ func TestAnUnplacedWitnessMakesTheJoinsInvariantsIncomplete(t *testing.T) {
 	_ = context.Background()
 }
 
-func TestARequestCountedOnlyBecauseItsConnectionIsGoneIsNotAnAdmission(t *testing.T) {
-	t0 := time.Now()
-	build := func(zombie bool) *World {
+// gateway#180, the admission-time invariant. The pool's guarantee for a spare-only
+// borrower is that it takes a slot only if the pool has room when it is ADMITTED
+// (the instant the gateway tells the upstream, X-Llmflow-Admitted-At); owners are
+// never refused, so the upstream may hold more than the pool because of them, and
+// that is not judged.
+func TestABorrowerIsJudgedAtItsAdmissionNotAtItsArrival(t *testing.T) {
+	adm := time.Now()
+	for _, c := range []struct {
+		name  string
+		build func(put func(string, Seen))
+		want  Status
+	}{
+		{"owners admitted after the borrower may arrive before it, and exceed the pool", func(put func(string, Seen)) {
+			for i := 0; i < 11; i++ { // started after the admission: not in the count then
+				put(fmt.Sprintf("o%d", i), Seen{Marker: fmt.Sprintf("MKetabA-s1-%d", i), Org: "etabA", Started: adm.Add(time.Millisecond), Ended: adm.Add(time.Second)})
+			}
+		}, Pass},
+		{"the pool was full of owners when the borrower was admitted", func(put func(string, Seen)) {
+			for i := 0; i < PoolCapacity; i++ {
+				put(fmt.Sprintf("o%d", i), Seen{Marker: fmt.Sprintf("MKetabA-s1-%d", i), Org: "etabA", Started: adm.Add(-time.Second), Ended: adm.Add(time.Second)})
+			}
+		}, Fail},
+		{"a request that had left the count before the admission does not hold a slot", func(put func(string, Seen)) {
+			for i := 0; i < PoolCapacity; i++ {
+				put(fmt.Sprintf("o%d", i), Seen{Marker: fmt.Sprintf("MKetabA-s1-%d", i), Org: "etabA", Started: adm.Add(-time.Second), Freed: adm.Add(-time.Millisecond), Ended: adm.Add(time.Second)})
+			}
+		}, Pass},
+		{"a killed replica's leftover (its connection gone) does not hold a slot", func(put func(string, Seen)) {
+			for i := 0; i < PoolCapacity; i++ {
+				put(fmt.Sprintf("o%d", i), Seen{Marker: fmt.Sprintf("MKetabA-s1-%d", i), Org: "etabA", Started: adm.Add(-time.Second), Gone: adm.Add(-time.Millisecond), Ended: adm.Add(time.Second)})
+			}
+		}, Pass},
+		{"borrowers among themselves over the pool", func(put func(string, Seen)) {
+			for i := 0; i < PoolCapacity; i++ {
+				put(fmt.Sprintf("b%d", i), Seen{Marker: fmt.Sprintf("MKtiers-s1-%d", i), Org: Borrower, Started: adm.Add(-time.Second), Ended: adm.Add(time.Second)})
+			}
+		}, Fail},
+	} {
 		w := &World{Sc: &Scenario{Name: "t"}, Up: NewUpstream(1)}
 		put := func(k string, s Seen) { w.Up.seen[k] = &s; w.Up.order = append(w.Up.order, k) }
-		put("a#1", Seen{Marker: "MKtiers-s1-1", Org: Borrower, Started: t0, Concurrent: PoolCapacity + 1, Ended: t0.Add(time.Second)})
-		if zombie { // a killed replica's request: connection gone before, handler still running after
-			put("b#2", Seen{Marker: "MKetabA-s1-2", Org: "etabA", Started: t0.Add(-time.Second), Gone: t0.Add(-time.Millisecond), Ended: t0.Add(time.Second)})
-		}
-		return w
-	}
-	for _, c := range []struct {
-		zombie bool
-		want   Status
-	}{{true, Pass}, {false, Fail}} {
-		w := build(c.zombie)
+		c.build(put)
+		put("me", Seen{Marker: "MKtiers-s1-99", Org: Borrower, N: 1, Started: adm.Add(2 * time.Millisecond), AdmittedAt: adm, Ended: adm.Add(time.Second)})
 		v := inv3(w, newJoin(w))
 		w.Up.Close()
 		if v.Status != c.want {
-			t.Fatalf("zombie=%v: %s %s", c.zombie, v.Status, v.Detail)
+			t.Errorf("%s: %s %s", c.name, v.Status, v.Detail)
+		}
+	}
+}
+
+// A release that does not tell the upstream when it admitted is not judged on
+// the concurrency, and the verdict says so.
+func TestWithoutTheAdmissionInstantTheConcurrencyIsNotJudgedAndSaysSo(t *testing.T) {
+	w := &World{Sc: &Scenario{Name: "t"}, Up: NewUpstream(1)}
+	defer w.Up.Close()
+	for i := 0; i < PoolCapacity+3; i++ {
+		s := Seen{Marker: fmt.Sprintf("MKetabA-s1-%d", i), Org: "etabA", Started: time.Now(), Ended: time.Now().Add(time.Second)}
+		w.Up.seen[s.Marker] = &s
+		w.Up.order = append(w.Up.order, s.Marker)
+	}
+	s := Seen{Marker: "MKtiers-s1-1", Org: Borrower, N: 1, Started: time.Now(), Concurrent: PoolCapacity + 4}
+	w.Up.seen[s.Marker] = &s
+	w.Up.order = append(w.Up.order, s.Marker)
+	v := inv3(w, newJoin(w))
+	if v.Status != Pass || !strings.Contains(v.Detail, "NOT judged") {
+		t.Fatalf("%s %s", v.Status, v.Detail)
+	}
+}
+
+// The witness of invariant 3 is asked of the releases that have it (v0.45.2) and
+// only of them: an older release refuses an attribute it does not know.
+func TestTheAdmissionWitnessIsAskedOnlyOfReleasesThatHaveIt(t *testing.T) {
+	for _, c := range []struct {
+		tag  string
+		want bool
+	}{{"v0.45.2", true}, {"v0.46.0", true}, {"v0.45.1", false}, {"v0.39.0", false}, {"", false}} {
+		g := &Gateway{topo: Topology{Tag: c.tag}}
+		if got := strings.Contains(g.config(), "admitted_header = true"); got != c.want {
+			t.Errorf("tag %q: admitted_header asked = %v, want %v", c.tag, got, c.want)
 		}
 	}
 }

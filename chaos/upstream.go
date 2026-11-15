@@ -58,6 +58,12 @@ type Seen struct {
 	Gone  time.Time
 	// Done is when the last event of a stream was written (zero otherwise).
 	Done time.Time
+	// AdmittedAt is when the gateway's pool admitted the request, as it told the
+	// upstream (X-Llmflow-Admitted-At; zero from a release that does not send it).
+	// Freed is when the request left the upstream's in-flight count: before the
+	// event that ends a stream is visible, or when the handler returns.
+	AdmittedAt time.Time
+	Freed      time.Time // zero while it is still counted in flight
 }
 
 const noPriority = -1 << 30
@@ -240,7 +246,12 @@ func (u *Upstream) serve(w http.ResponseWriter, r *http.Request) {
 	// run (gateway#180: 11 requests "in flight" within 1.5 ms, each over 0 to 3 ms
 	// later, with none abandoned, is that gap, not 11 admissions).
 	var relOnce sync.Once
-	release := func() { relOnce.Do(func() { u.inFl.Add(-1) }) }
+	release := func() {
+		relOnce.Do(func() {
+			u.inFl.Add(-1)
+			u.note(s, func(s *Seen) { s.Freed = time.Now() })
+		})
+	}
 	defer release()
 	for {
 		old := u.maxFl.Load()
@@ -249,6 +260,9 @@ func (u *Upstream) serve(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.Concurrent = int(cur)
+	if ns, err := strconv.ParseInt(r.Header.Get("X-Llmflow-Admitted-At"), 10, 64); err == nil && ns > 0 {
+		s.AdmittedAt = time.Unix(0, ns)
+	}
 	// One witness per hit: the gateway retries a failed attempt, and each hit
 	// is told apart by its sequence number.
 	key := s.Marker + "#" + strconv.FormatInt(n, 10)
