@@ -92,7 +92,7 @@ jobs:
       - name: summary
         if: always()
         run: cat table.md >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:
           name: hunt-${{ matrix.tag }}-${{ matrix.shard }}
@@ -101,7 +101,7 @@ jobs:
             table.md
             results.json
           retention-days: 30
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: failure()
         with:
           name: hunt-evidence-${{ matrix.tag }}-${{ matrix.shard }}
