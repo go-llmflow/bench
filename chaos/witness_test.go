@@ -3,6 +3,7 @@ package chaos
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -86,6 +87,42 @@ func TestARequestCountedOnlyBecauseItsConnectionIsGoneIsNotAnAdmission(t *testin
 		w.Up.Close()
 		if v.Status != c.want {
 			t.Fatalf("zombie=%v: %s %s", c.zombie, v.Status, v.Detail)
+		}
+	}
+}
+
+// gateway#180: owners are never refused, so owners that reach the upstream in the
+// instants before a spare-only borrower may bring the total above the pool without
+// any admission over it; borrowers' own requests and owners long in flight count.
+func TestOwnersArrivingJustBeforeABorrowerAreNotAnAdmissionOverThePool(t *testing.T) {
+	t0 := time.Now()
+	for _, c := range []struct {
+		name            string
+		ownerAge        time.Duration // how long before the borrower the owners started
+		borrowersAround int           // other borrowers in flight
+		want            Status
+	}{
+		{"owner burst a millisecond before", time.Millisecond, 0, Pass},
+		{"owners long in flight", time.Second, 0, Fail},
+		{"borrowers over the pool among themselves", time.Millisecond, 8, Fail},
+	} {
+		w := &World{Sc: &Scenario{Name: "t"}, Up: NewUpstream(1)}
+		put := func(k string, s Seen) { w.Up.seen[k] = &s; w.Up.order = append(w.Up.order, k) }
+		n := PoolCapacity
+		if c.borrowersAround > 0 {
+			n = 0
+		}
+		for i := 0; i < n; i++ {
+			put(fmt.Sprintf("o%d", i), Seen{Marker: fmt.Sprintf("MKetabA-s1-%d", i), Org: "etabA", Started: t0.Add(-c.ownerAge), Ended: t0.Add(time.Second)})
+		}
+		for i := 0; i < c.borrowersAround; i++ {
+			put(fmt.Sprintf("b%d", i), Seen{Marker: fmt.Sprintf("MKtiers-s1-%d", i), Org: Borrower, Started: t0.Add(-time.Millisecond), Ended: t0.Add(time.Second)})
+		}
+		put("me", Seen{Marker: "MKtiers-s1-99", Org: Borrower, Started: t0, Concurrent: PoolCapacity + 1 + c.borrowersAround, Ended: t0.Add(time.Second)})
+		v := inv3(w, newJoin(w))
+		w.Up.Close()
+		if v.Status != c.want {
+			t.Errorf("%s: %s %s", c.name, v.Status, v.Detail)
 		}
 	}
 }

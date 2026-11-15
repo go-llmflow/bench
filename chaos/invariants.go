@@ -459,6 +459,12 @@ func capList(v []string, n int) []string {
 
 // ---- invariant 3: the spare borrower and the owners' shares ----
 
+// admissionWindow is how long before a borrower's request reached the upstream
+// an owner's may have been admitted after the borrower's own admission: the
+// gateway's admission, a guard call or a forward between replicas, and the
+// upstream's accept. The sightings of gateway#180 are 0.1 to 1.6 ms.
+const admissionWindow = 25 * time.Millisecond
+
 func inv3(w *World, j *join) Verdict {
 	var tiersHits, over int
 	var worst int
@@ -474,14 +480,26 @@ func inv3(w *World, j *join) Verdict {
 				// returned, including those of a replica that was killed: their
 				// connection is gone (Gone before this request started) but the
 				// handler still runs (Ended after). They are not admissions.
-				z := 0
+				z, ob := 0, 0
 				for _, o := range seen {
-					if !o.Gone.IsZero() && o.Gone.Before(s.Started) && o.Ended.After(o.Gone) && o.Ended.After(s.Started) {
+					if o.Marker == s.Marker || o.Started.After(s.Started) || !(o.Ended.IsZero() || o.Ended.After(s.Started)) {
+						continue
+					}
+					// An owner's request admitted just after the borrower's own
+					// admission may reach the upstream before it (gateway#180): the
+					// borrower takes a slot only if the pool has room when it is
+					// ADMITTED, atomically (ha.TestSpareOnlyAdmissionIsOneStepAcrossReplicas),
+					// and the owners are never refused (they queue by priority at the
+					// engine), so the total may pass the pool without an admission over it.
+					switch {
+					case !o.Gone.IsZero() && o.Gone.Before(s.Started):
 						z++
+					case o.Org != Borrower && s.Started.Sub(o.Started) < admissionWindow:
+						ob++
 					}
 				}
-				if s.Concurrent-z <= PoolCapacity {
-					zombieNote += fmt.Sprintf(" [%s counted %d in flight, %d of them already abandoned by their connection: not an admission over the pool]", s.Marker, s.Concurrent, z)
+				if s.Concurrent-z-ob <= PoolCapacity {
+					zombieNote += fmt.Sprintf(" [%s counted %d in flight: %d abandoned by their connection, %d owner requests that arrived within %s before it: not an admission over the pool]", s.Marker, s.Concurrent, z, ob, admissionWindow)
 					continue
 				}
 				over++
