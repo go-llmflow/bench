@@ -139,6 +139,7 @@ func Setup(ctx context.Context, opt Options, sc *Scenario) (*World, error) {
 	fail := func(err error) (*World, error) { w.Close(); return nil, err }
 
 	w.Up = NewUpstream(24)
+	w.Up.SetRunTag(runTag(w.Opt.Seed))
 	w.closers = append(w.closers, w.Up.Close)
 	if sc.PrioritySlots > 0 {
 		w.Up.SetSlots(sc.PrioritySlots)
