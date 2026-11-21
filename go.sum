@@ -6,10 +6,10 @@ github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/go-authn/oidc v0.7.0 h1:PrEjnAj/QEeNMzPg2Y8DSSQX9fJwsblKpWWZHmetjMA=
 github.com/go-authn/oidc v0.7.0/go.mod h1:H/Hodeu9kh/Xz3y51XfYu6MZdMJaNfXClyVH0GTUebE=
-github.com/go-authn/saml v0.6.1 h1:whx2zwAccAeWi87r8rz0MtXrKMdP75wzp2aaZ7DPeq4=
-github.com/go-authn/saml v0.6.1/go.mod h1:zmSqNnBAvVglMlcfZ0xiCdGMXSsLO8tPG9DGkAKPFNs=
-github.com/go-fleettools/fleettools v0.123.0 h1:AqNtdx4YdpZfgh81Lr0hN1pQDmm2dYgR7kRWjd3sdlc=
-github.com/go-fleettools/fleettools v0.123.0/go.mod h1:VMJSFF4heaZCvXxhvyfZiSlVd3IWSD02nehTbWeEP3M=
+github.com/go-authn/saml v0.7.0 h1:5lW5GotwEkJOhBMEV9OUJTwtMsgmUM/NunJkr0QpABE=
+github.com/go-authn/saml v0.7.0/go.mod h1:6i1vs7A6broA6e5kfGybGUoUPVA7EyqKGIT+vhVs7tM=
+github.com/go-fleettools/fleettools v0.150.0 h1:hYszLeiocjoxvv4I/dunxG0IAq3kXZNTxVoDOjSP7Cg=
+github.com/go-fleettools/fleettools v0.150.0/go.mod h1:VMJSFF4heaZCvXxhvyfZiSlVd3IWSD02nehTbWeEP3M=
 github.com/go-redfish/redfish v0.15.0 h1:dG/LtAs2WmXLU0JSMMWjQ/7EwX/OwLvqCJCrZxWzbis=
 github.com/go-redfish/redfish v0.15.0/go.mod h1:QBM6V4vHJO3VsH0J3LwOi+09pwpVMchw+SrNz6B0xjI=
 github.com/inconshreveable/mousetrap v1.1.0 h1:wN+x4NVGpMsO7ErUn/mUI3vEoE6Jt13X2s0bqwp9tc8=

@@ -4,8 +4,8 @@ go 1.27.4
 
 require (
 	github.com/go-authn/oidc v0.7.0
-	github.com/go-authn/saml v0.6.1
-	github.com/go-fleettools/fleettools v0.123.0
+	github.com/go-authn/saml v0.7.0
+	github.com/go-fleettools/fleettools v0.150.0
 	github.com/go-redfish/redfish v0.15.0
 	github.com/jackc/pgx/v5 v5.13.0
 	github.com/spf13/cobra v1.10.2
